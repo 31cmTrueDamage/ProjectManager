@@ -1,0 +1,9 @@
+# Create .gitignore
+@"
+projects/
+settings.json
+build/
+__pycache__/
+*.spec
+*.pyc
+"@ | Out-File -Encoding utf8 .gitignore
