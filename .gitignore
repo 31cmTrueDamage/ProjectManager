@@ -3,6 +3,7 @@
 projects/
 settings.json
 build/
+.env
 __pycache__/
 *.spec
 *.pyc
