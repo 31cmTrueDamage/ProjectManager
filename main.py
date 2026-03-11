@@ -265,6 +265,11 @@ def main(page: ft.Page):
             for item in nav_items:
                 item.set_theme(th)
 
+        def refresh_home():
+            if current_screen[0] == "Home":
+                render_screen("Home")
+                page.update()
+
         def render_screen(name):
             current_screen[0] = name
             settings_dirty[0] = None
@@ -273,7 +278,7 @@ def main(page: ft.Page):
                     go_to_projects, th, username, page)
             elif name == "Projects":
                 content_container.content = build_projects_screen(
-                    page, th, username, session=session)
+                    page, th, refresh_home, username, session=session)
             elif name == "Settings":
                 screen, dirty = build_settings_screen(
                     th, settings, on_settings_save, page,

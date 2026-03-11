@@ -3,7 +3,7 @@ from datetime import datetime
 from config import DARK, PRIORITY_COLORS, PRIORITY_BG, PRIORITY_BG_DK, PROJECT_PALETTE
 from storage import (read_projects, write_project, delete_project_file, now_str, slug,
                      _parse_notes, can, CAN_DELETE_PROJECT, CAN_ADD_TASKS, CAN_EDIT_TASKS,
-                     CAN_ADD_NOTES, CAN_MANAGE_MEMBERS, invalidate_cache)
+                     CAN_ADD_NOTES, CAN_MANAGE_MEMBERS)
 from ui_components import pill, section_label, hover_btn, show_confirm, show_toast
 from ui_members import build_members_panel
 
@@ -449,7 +449,40 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     selected_idx = [None]
     detail_col   = ft.Column([], spacing=0, expand=True)
     list_col     = ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
-    dlg          = ft.AlertDialog(modal=True, title=ft.Text(""))
+    dlg          = ft.AlertDialog(modal=True)
+
+    # Alias to avoid closure shadowing issues with the 'refresh_home' parameter
+    _do_refresh_home = refresh_home
+
+    # ── Sort state ────────────────────────────────────────────────────────────
+    sort_mode = ["manual"]
+    SORT_OPTIONS = {
+        "manual":  "Manual",
+        "alpha":   "A → Z",
+        "created": "Created",
+        "updated": "Modified",
+    }
+
+    def sorted_project_indices() -> list:
+        indices = list(range(len(projects)))
+        mode = sort_mode[0]
+        if mode == "alpha":
+            indices.sort(key=lambda i: projects[i].get("name", "").lower())
+        elif mode == "created":
+            def _created_key(i):
+                raw = projects[i].get("created", "")
+                try: return datetime.strptime(raw, "%Y-%m-%d")
+                except Exception: return datetime.min
+            indices.sort(key=_created_key, reverse=True)
+        elif mode == "updated":
+            def _updated_key(i):
+                raw = projects[i].get("updated") or projects[i].get("created", "")
+                for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                    try: return datetime.strptime(raw, fmt)
+                    except Exception: pass
+                return datetime.min
+            indices.sort(key=_updated_key, reverse=True)
+        return indices
 
     def _confirm(title, msg, label, fn, danger=True):
         show_confirm(page, th, dlg, title, msg, label, fn, danger)
@@ -461,6 +494,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     def task_row_widget(proj, task_idx, refresh_fn):
         task = proj["tasks"][task_idx]
 
+        # Ensure subtasks list exists
         if not isinstance(task.get("subtasks"), list):
             task["subtasks"] = []
 
@@ -469,14 +503,12 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
 
         def toggle_done(e):
             task["done"] = e.control.value
-            write_project(proj)
-            refresh_fn()
+            write_project(proj); refresh_fn(); _do_refresh_home()
 
         def ask_del(e):
             def do():
                 proj["tasks"].pop(task_idx)
-                write_project(proj)
-                refresh_fn()
+                write_project(proj); refresh_fn(); _do_refresh_home()
                 _toast("Task deleted", success=False)
             _confirm("Delete task?", f'Remove "{task["text"]}"?', "Delete", do)
 
@@ -536,8 +568,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     # ── Detail panel ──────────────────────────────────────────────────────────
     def open_project(idx):
         selected_idx[0] = idx
-        render_list()
-        render_detail()
+        render_list(); render_detail()
 
     def empty_detail():
         detail_col.controls = [ft.Container(
@@ -550,14 +581,25 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             expand=True, alignment=ft.Alignment.CENTER,
         )]
 
-    def do_refresh(e=None):
-        invalidate_cache()
-        projects.clear()
-        projects.extend(read_projects())
-        render_list()
-        render_detail()
-
     def render_detail():
+        # Detach hover handlers on any hover_btn containers before discarding them
+        def _clear_hovers(controls):
+            for c in controls:
+                try:
+                    c.on_hover = None
+                except Exception:
+                    pass
+                try:
+                    _clear_hovers(c.controls)
+                except Exception:
+                    pass
+                try:
+                    inner = getattr(c, "content", None)
+                    if inner:
+                        _clear_hovers([inner])
+                except Exception:
+                    pass
+        _clear_hovers(detail_col.controls)
         detail_col.controls.clear()
         idx = selected_idx[0]
         if idx is None or idx >= len(projects):
@@ -633,7 +675,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             })
             write_project(proj)
             new_task_tf.value = ""; new_desc_tf.value = ""
-            render_detail()
+            render_detail(); _do_refresh_home()
             _toast("Task added")
 
         add_btn = hover_btn("Add", ft.Icons.ADD_ROUNDED, add_task, th, page,
@@ -642,10 +684,16 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
 
         def ask_delete_project(e):
             def do():
+                proj_name = proj["name"]
                 delete_project_file(proj)
-                projects.pop(idx); selected_idx[0] = None
-                render_list(); empty_detail(); page.update()
-                _toast(f'"{proj["name"]}" deleted', success=False)
+                # delete_project_file already removes proj from the cache list (projects).
+                # We must NOT call projects.pop() again or we'd remove a different project.
+                selected_idx[0] = None
+                render_list()
+                empty_detail()
+                _do_refresh_home()
+                page.update()
+                _toast(f'"{proj_name}" deleted', success=False)
             _confirm("Delete project?",
                      f'"{proj["name"]}" and all its tasks will be removed.',
                      "Delete Project", do)
@@ -676,11 +724,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         share_btn = hover_btn("Members", ft.Icons.GROUP_ROUNDED, show_members,
                               th, page, outline=True)
 
-        refresh_btn = hover_btn("Refresh", ft.Icons.REFRESH_ROUNDED, do_refresh,
-                                th, page, outline=True,
-                                padding=ft.Padding.symmetric(vertical=9, horizontal=14),
-                                border_radius=8)
-
         task_list = ft.Column(
             [task_row_widget(proj, i, render_detail) for i in range(len(tasks))],
             scroll=ft.ScrollMode.AUTO, expand=True,
@@ -696,7 +739,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                     ft.Text(proj["name"], size=20, weight=ft.FontWeight.BOLD,
                             color=th["text"], expand=True),
                     ft.Text(f"{pct}%", size=12, color=th["text3"]),
-                    refresh_btn,
                     share_btn,
                     del_proj_btn,
                 ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -733,11 +775,11 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         bgcolor=th["input_bg"], color=th["text"],
         label_style=ft.TextStyle(color=th["text3"]), text_size=13, height=50,
         content_padding=ft.Padding.symmetric(horizontal=14, vertical=0))
-    modal_err        = ft.Text("Project name is required.", size=11,
-                               color=th["danger"], visible=False)
-    modal_color_idx  = [0]
+    modal_err       = ft.Text("Project name is required.", size=11,
+                              color=th["danger"], visible=False)
+    modal_color_idx = [0]
     modal_color_dots = []
-    new_proj_dlg     = ft.AlertDialog(modal=True, title=ft.Text(""))
+    new_proj_dlg = ft.AlertDialog(modal=True, title=ft.Text(""))
 
     def make_color_dot(i):
         dot = ft.Container(
@@ -778,9 +820,13 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                 "tasks":      [],
                 "file":       slug(name) + ".md",
             }
-            write_project(proj); projects.append(proj)
-            new_proj_dlg.open = False; page.update()
-            render_list(); open_project(len(projects) - 1)
+            write_project(proj)
+            projects.append(proj)
+            new_proj_dlg.open = False
+            page.update()
+            render_list()
+            open_project(len(projects) - 1)
+            _do_refresh_home()
             _toast(f'"{name}" created')
 
         new_proj_dlg.title   = ft.Text("New Project", weight=ft.FontWeight.W_700, color=th["text"])
@@ -818,7 +864,8 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                     ft.Text(proj["name"], size=13, weight=ft.FontWeight.W_600,
                             color=th["accent"] if is_sel else th["text"], expand=True),
                     ft.Text(f"{pct}%", size=11, color=th["text3"]),
-                    ft.Icon(ft.Icons.DRAG_INDICATOR_ROUNDED, size=14, color=th["text3"]),
+                    ft.Icon(ft.Icons.DRAG_INDICATOR_ROUNDED, size=14,
+                            color=th["text3"] if sort_mode[0] == "manual" else "transparent"),
                 ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.ProgressBar(value=pct / 100, color=proj["color"],
                                bgcolor=th["border"], height=4, border_radius=2),
@@ -856,28 +903,76 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             drag_src[0] = None
             render_list(); page.update()
 
+        draggable_content = ft.Draggable(
+            group="proj",
+            content=card_inner,
+            content_when_dragging=ft.Container(
+                content=ft.Row([
+                    ft.Container(width=10, height=10, bgcolor=proj["color"], border_radius=5),
+                    ft.Text(proj["name"], size=13, color=th["text3"], expand=True),
+                ], spacing=8),
+                padding=14, border_radius=10, opacity=0.5,
+                bgcolor=th["border"], border=ft.Border.all(1, th["border2"]),
+            ),
+            data=idx,
+            on_drag_start=lambda e: drag_src.__setitem__(0, e.control.data),
+        ) if sort_mode[0] == "manual" else card_inner
+
         return ft.DragTarget(
             group="proj",
-            content=ft.Draggable(
-                group="proj",
-                content=card_inner,
-                content_when_dragging=ft.Container(
-                    content=ft.Row([
-                        ft.Container(width=10, height=10, bgcolor=proj["color"], border_radius=5),
-                        ft.Text(proj["name"], size=13, color=th["text3"], expand=True),
-                    ], spacing=8),
-                    padding=14, border_radius=10, opacity=0.5,
-                    bgcolor=th["border"], border=ft.Border.all(1, th["border2"]),
-                ),
-                data=idx,
-                on_drag_start=lambda e: drag_src.__setitem__(0, e.control.data),
-            ),
+            content=draggable_content,
             on_accept=on_accept,
         )
 
     def render_list():
-        list_col.controls = [small_project_card(i) for i in range(len(projects))]
+        # Detach hover handlers from old controls before discarding them,
+        # so Flet doesn't fire events on controls no longer in the page tree.
+        for ctrl in list_col.controls:
+            try:
+                # DragTarget wraps a Draggable wraps card_inner, or just card_inner
+                draggable = getattr(ctrl, "content", None)
+                card = getattr(draggable, "content", None) or draggable
+                if card is not None:
+                    card.on_hover = None
+            except Exception:
+                pass
+        list_col.controls = [small_project_card(i) for i in sorted_project_indices()]
         page.update()
+
+    # ── Sort dropdown (defined here so render_list is already in scope) ───────
+    sort_lbl = ft.Text("Manual", size=11, weight=ft.FontWeight.W_500, color=th["text2"])
+
+    def _on_sort_click(e):
+        key = e.control.data
+        sort_mode[0] = key
+        sort_lbl.value = SORT_OPTIONS[key]
+        render_list()
+        page.update()
+
+    sort_dd = ft.PopupMenuButton(
+        content=ft.Container(
+            content=ft.Row(
+                [ft.Icon(ft.Icons.SORT_ROUNDED, color=th["text3"], size=14),
+                 sort_lbl,
+                 ft.Icon(ft.Icons.ARROW_DROP_DOWN_ROUNDED, color=th["text3"], size=16)],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            border=ft.Border.all(1, th["border2"]),
+            border_radius=8,
+            bgcolor=th["input_bg"],
+            height=30,
+            padding=ft.Padding.symmetric(horizontal=8),
+        ),
+        items=[
+            ft.PopupMenuItem(
+                content=ft.Text(label, size=12, color=th["text"]),
+                data=key,
+                on_click=_on_sort_click,
+            )
+            for key, label in SORT_OPTIONS.items()
+        ],
+    )
 
     render_list()
     empty_detail()
@@ -894,9 +989,14 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                 new_proj_btn,
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([
+                ft.Icon(ft.Icons.SORT_ROUNDED, size=12, color=th["text3"]),
+                ft.Text("Sort:", size=11, color=th["text3"]),
+                sort_dd,
+            ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Divider(height=1, color=th["divider"]),
             list_col,
-        ], spacing=10),
+        ], spacing=8),
         width=248, padding=20, bgcolor=th["sidebar"],
         border=ft.Border.only(right=ft.BorderSide(1, th["border"])),
     )

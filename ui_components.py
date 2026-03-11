@@ -57,6 +57,8 @@ def hover_btn(
 
     def on_hover(e):
         try:
+            if btn.page is None:
+                return
             hovered = e.data == "true"
             if outline:
                 btn.bgcolor = c if hovered else "transparent"
