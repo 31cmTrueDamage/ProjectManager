@@ -329,7 +329,7 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
                          padding=ft.Padding.symmetric(vertical=11, horizontal=16),
                          border_radius=9)
 
-    dlg = ft.AlertDialog(modal=True)
+    dlg = ft.AlertDialog(modal=True, title=ft.Text(""))
 
     def save_task(e):
         txt = name_tf.value.strip()
@@ -645,7 +645,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                                  th, page, color=th["danger"], outline=True)
         del_proj_btn.visible = can(proj, uid, CAN_DELETE_PROJECT)
 
-        members_dlg = ft.AlertDialog(modal=False)
+        members_dlg = ft.AlertDialog(modal=False, title=ft.Text(""))
 
         def show_members(e):
             members_dlg.content = build_members_panel(
@@ -658,6 +658,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             )
             members_dlg.bgcolor = "transparent"
             members_dlg.shadow  = False
+            members_dlg.title   = ft.Text("")
             if members_dlg not in page.overlay:
                 page.overlay.append(members_dlg)
             members_dlg.open = True
@@ -721,7 +722,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                               color=th["danger"], visible=False)
     modal_color_idx = [0]
     modal_color_dots = []
-    new_proj_dlg     = ft.AlertDialog(modal=True)
+    new_proj_dlg = ft.AlertDialog(modal=True, title=ft.Text(""))
 
     def make_color_dot(i):
         dot = ft.Container(

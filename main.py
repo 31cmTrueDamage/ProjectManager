@@ -1,5 +1,6 @@
 import flet as ft
 import os
+import time
 import threading
 from config import DARK, LIGHT
 from storage import (
@@ -396,6 +397,20 @@ def main(page: ft.Page):
 
         # Fetch invitations in background after first render
         threading.Thread(target=_reload_invites, daemon=True).start()
+
+        def _poll_live():
+            while True:
+                time.sleep(15)  # poll every 15 seconds
+                try:
+                    invalidate_cache()
+                    _reload_invites()
+                    if current_screen[0] in ("Home", "Projects"):
+                        render_screen(current_screen[0])
+                    page.update()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_poll_live, daemon=True).start()
 
         app_row = ft.Row([sidebar, content_container], expand=True, spacing=0)
 

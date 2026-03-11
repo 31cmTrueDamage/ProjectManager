@@ -157,7 +157,7 @@ def build_members_panel(proj: dict, session: dict, th, page: ft.Page,
             role_controls = [r_dd]
 
             # Remove button (demotes to viewer)
-            conf_dlg = ft.AlertDialog(modal=True)
+            conf_dlg = ft.AlertDialog(modal=True, title=ft.Text(""))
             def ask_remove(e, mu=m_uid, dn=display):
                 show_confirm(page, th, conf_dlg,
                              "Remove member?",
