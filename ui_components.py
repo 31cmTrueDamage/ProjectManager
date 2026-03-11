@@ -19,61 +19,50 @@ def section_label(text: str, icon, th: dict) -> ft.Row:
     ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
 
-# ── Generic hover button (Container-based, reliable color inversion) ──────────
+# ── Generic hover button — native ButtonStyle, zero Python on_hover callbacks ─
 def hover_btn(
     label: str,
     icon_name,
     on_click,
     th: dict,
-    page: ft.Page,
+    page: ft.Page,          # kept for API compatibility, no longer used
     color: str = None,
     outline: bool = False,
     padding: ft.Padding = None,
     border_radius: int = 8,
     height: int = None,
-) -> ft.Container:
-    """
-    outline=True  → border/text colored, fills on hover
-    outline=False → solid fill, inverts to outline on hover
-    """
-    c = color or th["accent"]
+) -> ft.ElevatedButton:
+    c   = color or th["accent"]
     pad = padding or ft.Padding.symmetric(vertical=8, horizontal=14)
 
-    ic  = ft.Icon(icon_name, color=(c if outline else "#FFFFFF"), size=13)
-    lbl = ft.Text(label, color=(c if outline else "#FFFFFF"),
-                  size=12, weight=ft.FontWeight.W_500) if label else None
-    row_children = [ic] + ([lbl] if lbl else [])
+    if outline:
+        style = ft.ButtonStyle(
+            color={ft.ControlState.DEFAULT: c, ft.ControlState.HOVERED: "#FFFFFF"},
+            bgcolor={ft.ControlState.DEFAULT: "transparent", ft.ControlState.HOVERED: c},
+            side={ft.ControlState.DEFAULT: ft.BorderSide(1.5, c), ft.ControlState.HOVERED: ft.BorderSide(1.5, c)},
+            overlay_color=ft.Colors.TRANSPARENT,
+            padding=pad,
+            shape=ft.RoundedRectangleBorder(radius=border_radius),
+        )
+    else:
+        style = ft.ButtonStyle(
+            color={ft.ControlState.DEFAULT: "#FFFFFF", ft.ControlState.HOVERED: c},
+            bgcolor={ft.ControlState.DEFAULT: c, ft.ControlState.HOVERED: "transparent"},
+            side={ft.ControlState.DEFAULT: ft.BorderSide(1.5, c), ft.ControlState.HOVERED: ft.BorderSide(1.5, c)},
+            overlay_color=ft.Colors.TRANSPARENT,
+            padding=pad,
+            shape=ft.RoundedRectangleBorder(radius=border_radius),
+        )
 
-    btn = ft.Container(
-        content=ft.Row(row_children, spacing=5,
-                       alignment=ft.MainAxisAlignment.CENTER, tight=True),
-        bgcolor="transparent" if outline else c,
-        border=ft.Border.all(1.5, c),
-        border_radius=border_radius,
-        padding=pad,
-        on_click=on_click,
+    content_row = ft.Row(
+        [ft.Icon(icon_name, size=13), ft.Text(label, size=12, weight=ft.FontWeight.W_500)] if label
+        else [ft.Icon(icon_name, size=13)],
+        spacing=5, alignment=ft.MainAxisAlignment.CENTER, tight=True,
+    )
+    return ft.ElevatedButton(
+        content=content_row, style=style, on_click=on_click,
         **({"height": height} if height else {}),
     )
-
-    def on_hover(e):
-        try:
-            if btn.page is None:
-                return
-            hovered = e.data == "true"
-            if outline:
-                btn.bgcolor = c if hovered else "transparent"
-                ic.color  = "#FFFFFF" if hovered else c
-                if lbl: lbl.color = "#FFFFFF" if hovered else c
-            else:
-                btn.bgcolor = "transparent" if hovered else c
-                ic.color  = c if hovered else "#FFFFFF"
-                if lbl: lbl.color = c if hovered else "#FFFFFF"
-            page.update()
-        except Exception:
-            pass
-
-    btn.on_hover = on_hover
-    return btn
 
 
 # ── Confirm dialog ────────────────────────────────────────────────────────────
@@ -114,7 +103,7 @@ def show_toast(page: ft.Page, th: dict, message: str, success: bool = True) -> N
     page.update()
 
 
-# ── Nav item ──────────────────────────────────────────────────────────────────
+# ── Nav item — uses ink for hover, no on_hover callback ───────────────────────
 class NavItem(ft.Container):
     def __init__(self, icon, label: str, on_click_handler, th: dict, selected: bool = False):
         super().__init__()
@@ -126,8 +115,10 @@ class NavItem(ft.Container):
         self.border_radius    = 10
         self.bgcolor          = th["nav_sel_bg"] if selected else "transparent"
         self.animate          = ft.Animation(180, ft.AnimationCurve.EASE_IN_OUT)
-        self.on_hover         = self._hover
+        self.ink              = True
+        self.ink_color        = th["accent"] + "22"
         self.on_click         = self._click
+        # No on_hover — handled natively by ink
 
         self.indicator = ft.Container(
             width=3, height=22,
@@ -150,6 +141,7 @@ class NavItem(ft.Container):
 
     def set_theme(self, th: dict) -> None:
         self.th = th
+        self.ink_color = th["accent"] + "22"
         self.set_state(self.selected)
 
     def set_state(self, active: bool) -> None:
@@ -159,8 +151,3 @@ class NavItem(ft.Container):
         self.icon_ctl.color    = self.th["accent"]     if active else self.th["text3"]
         self.text_ctl.color    = self.th["accent"]     if active else self.th["text2"]
         self.update()
-
-    def _hover(self, e):
-        if not self.selected:
-            self.bgcolor = self.th["nav_hover"] if e.data == "true" else "transparent"
-            self.update()

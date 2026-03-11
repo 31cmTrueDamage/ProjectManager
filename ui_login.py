@@ -16,8 +16,7 @@ def build_login_screen(page: ft.Page, th: dict, on_login_success) -> ft.Containe
                                    color=th["accent"], visible=False)
 
     # ── Google button ─────────────────────────────────────────────────────────
-    g_lbl = ft.Text("Continue with Google", size=14, weight=ft.FontWeight.W_600,
-                    color=th["text"])
+    g_lbl = ft.Text("Continue with Google", size=14, weight=ft.FontWeight.W_600)
     g_icon = ft.Image(
         src="https://www.google.com/favicon.ico",
         width=18, height=18, fit="contain",
@@ -30,7 +29,7 @@ def build_login_screen(page: ft.Page, th: dict, on_login_success) -> ft.Containe
         alignment=ft.Alignment.CENTER,
     )
 
-    google_btn = ft.Container(
+    google_btn = ft.ElevatedButton(
         content=ft.Row(
             [g_icon_fallback, g_lbl],
             spacing=12,
@@ -38,25 +37,16 @@ def build_login_screen(page: ft.Page, th: dict, on_login_success) -> ft.Containe
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             tight=True,
         ),
-        bgcolor=th["card"],
-        border=ft.Border.all(1.5, th["border2"]),
-        border_radius=12,
-        padding=ft.Padding.symmetric(vertical=14, horizontal=28),
+        style=ft.ButtonStyle(
+            color={ft.ControlState.DEFAULT: th["text"], ft.ControlState.HOVERED: th["text"]},
+            bgcolor={ft.ControlState.DEFAULT: th["card"], ft.ControlState.HOVERED: th["nav_hover"]},
+            side={ft.ControlState.DEFAULT: ft.BorderSide(1.5, th["border2"]), ft.ControlState.HOVERED: ft.BorderSide(1.5, th["accent"])},
+            overlay_color=ft.Colors.TRANSPARENT,
+            padding=ft.Padding.symmetric(vertical=14, horizontal=28),
+            shape=ft.RoundedRectangleBorder(radius=12),
+        ),
         width=280,
-        alignment=ft.Alignment.CENTER,
-        animate=ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT),
     )
-
-    def on_hover(e):
-        try:
-            google_btn.bgcolor = th["nav_hover"] if e.data == "true" else th["card"]
-            google_btn.border  = ft.Border.all(
-                1.5, th["accent"] if e.data == "true" else th["border2"]
-            )
-            google_btn.update()
-        except Exception:
-            pass
-    google_btn.on_hover = on_hover
 
     def set_loading(loading: bool, msg: str = ""):
         loading_ring.visible = loading

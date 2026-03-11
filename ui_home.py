@@ -32,26 +32,22 @@ def build_home_screen(go_to_projects, th: dict, username: str, page: ft.Page) ->
             expand=True, alignment=ft.Alignment.CENTER,
         )
 
-    lbl  = ft.Text("View Projects", color="#FFFFFF", weight=ft.FontWeight.W_600, size=13)
-    icon = ft.Icon(ft.Icons.ARROW_FORWARD_ROUNDED, color="#FFFFFF", size=16)
-    btn  = ft.Container(
-        content=ft.Row([lbl, icon], alignment=ft.MainAxisAlignment.CENTER,
-                       spacing=8, tight=True),
-        bgcolor=th["accent"], border=ft.Border.all(1.5, th["accent"]),
-        border_radius=10, padding=ft.Padding.symmetric(vertical=14, horizontal=28),
-        on_click=go_to_projects, width=200, alignment=ft.Alignment.CENTER,
+    btn = ft.ElevatedButton(
+        content=ft.Row([
+            ft.Text("View Projects", size=13, weight=ft.FontWeight.W_600),
+            ft.Icon(ft.Icons.ARROW_FORWARD_ROUNDED, size=16),
+        ], alignment=ft.MainAxisAlignment.CENTER, spacing=8, tight=True),
+        style=ft.ButtonStyle(
+            color={ft.ControlState.DEFAULT: "#FFFFFF", ft.ControlState.HOVERED: th["accent"]},
+            bgcolor={ft.ControlState.DEFAULT: th["accent"], ft.ControlState.HOVERED: "transparent"},
+            side={ft.ControlState.DEFAULT: ft.BorderSide(1.5, th["accent"]), ft.ControlState.HOVERED: ft.BorderSide(1.5, th["accent"])},
+            overlay_color=ft.Colors.TRANSPARENT,
+            padding=ft.Padding.symmetric(vertical=14, horizontal=28),
+            shape=ft.RoundedRectangleBorder(radius=10),
+        ),
+        on_click=go_to_projects,
+        width=200,
     )
-
-    def on_hover(e):
-        try:
-            h = e.data == "true"
-            btn.bgcolor = "transparent" if h else th["accent"]
-            lbl.color   = th["accent"]  if h else "#FFFFFF"
-            icon.color  = th["accent"]  if h else "#FFFFFF"
-            page.update()
-        except Exception:
-            pass
-    btn.on_hover = on_hover
 
     return ft.Container(
         content=ft.Column([

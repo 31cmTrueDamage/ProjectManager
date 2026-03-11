@@ -34,26 +34,21 @@ def build_settings_screen(th: dict, settings: dict, on_save, page: ft.Page,
     dark_sw.on_change = mark_dirty
 
     # ── Save button ───────────────────────────────────────────────────────────
-    save_lbl  = ft.Text("Save Changes", color="#FFFFFF", size=13, weight=ft.FontWeight.W_600)
-    save_icon = ft.Icon(ft.Icons.CHECK_ROUNDED, color="#FFFFFF", size=16, visible=False)
-    save_btn  = ft.Container(
+    save_icon = ft.Icon(ft.Icons.CHECK_ROUNDED, size=16, visible=False)
+    save_lbl  = ft.Text("Save Changes", size=13, weight=ft.FontWeight.W_600)
+    save_btn  = ft.ElevatedButton(
         content=ft.Row([save_icon, save_lbl], spacing=6,
                        alignment=ft.MainAxisAlignment.CENTER, tight=True),
-        bgcolor=th["accent"], border=ft.Border.all(1.5, th["accent"]),
-        border_radius=10, padding=ft.Padding.symmetric(vertical=12, horizontal=24),
-        width=180, alignment=ft.Alignment.CENTER,
+        style=ft.ButtonStyle(
+            color={ft.ControlState.DEFAULT: "#FFFFFF", ft.ControlState.HOVERED: th["accent"]},
+            bgcolor={ft.ControlState.DEFAULT: th["accent"], ft.ControlState.HOVERED: "transparent"},
+            side={ft.ControlState.DEFAULT: ft.BorderSide(1.5, th["accent"]), ft.ControlState.HOVERED: ft.BorderSide(1.5, th["accent"])},
+            overlay_color=ft.Colors.TRANSPARENT,
+            padding=ft.Padding.symmetric(vertical=12, horizontal=24),
+            shape=ft.RoundedRectangleBorder(radius=10),
+        ),
+        width=180,
     )
-
-    def on_save_hover(e):
-        try:
-            h = e.data == "true"
-            save_btn.bgcolor = "transparent" if h else th["accent"]
-            save_lbl.color   = th["accent"]  if h else "#FFFFFF"
-            save_icon.color  = th["accent"]  if h else "#FFFFFF"
-            page.update()
-        except Exception:
-            pass
-    save_btn.on_hover = on_save_hover
 
     def do_save(e):
         settings["dark_mode"] = dark_sw.value
@@ -77,28 +72,23 @@ def build_settings_screen(th: dict, settings: dict, on_save, page: ft.Page,
     save_btn.on_click = do_save
 
     # ── Sign-out button ───────────────────────────────────────────────────────
-    so_lbl = ft.Text("Sign Out", color=th["danger"], size=13, weight=ft.FontWeight.W_600)
-    so_icon = ft.Icon(ft.Icons.LOGOUT_ROUNDED, color=th["danger"], size=16)
-    sign_out_btn = ft.Container(
-        content=ft.Row([so_icon, so_lbl], spacing=6,
-                       alignment=ft.MainAxisAlignment.CENTER, tight=True),
-        bgcolor="transparent", border=ft.Border.all(1.5, th["danger"]),
-        border_radius=10, padding=ft.Padding.symmetric(vertical=12, horizontal=24),
-        width=180, alignment=ft.Alignment.CENTER,
+    sign_out_btn = ft.ElevatedButton(
+        content=ft.Row([
+            ft.Icon(ft.Icons.LOGOUT_ROUNDED, size=16),
+            ft.Text("Sign Out", size=13, weight=ft.FontWeight.W_600),
+        ], spacing=6, alignment=ft.MainAxisAlignment.CENTER, tight=True),
+        style=ft.ButtonStyle(
+            color={ft.ControlState.DEFAULT: th["danger"], ft.ControlState.HOVERED: "#FFFFFF"},
+            bgcolor={ft.ControlState.DEFAULT: "transparent", ft.ControlState.HOVERED: th["danger"]},
+            side={ft.ControlState.DEFAULT: ft.BorderSide(1.5, th["danger"]), ft.ControlState.HOVERED: ft.BorderSide(1.5, th["danger"])},
+            overlay_color=ft.Colors.TRANSPARENT,
+            padding=ft.Padding.symmetric(vertical=12, horizontal=24),
+            shape=ft.RoundedRectangleBorder(radius=10),
+        ),
+        width=180,
         visible=on_sign_out is not None,
+        on_click=lambda _: on_sign_out() if on_sign_out else None,
     )
-
-    def on_so_hover(e):
-        try:
-            h = e.data == "true"
-            sign_out_btn.bgcolor = th["danger"] if h else "transparent"
-            so_lbl.color  = "#FFFFFF" if h else th["danger"]
-            so_icon.color = "#FFFFFF" if h else th["danger"]
-            page.update()
-        except Exception:
-            pass
-    sign_out_btn.on_hover = on_so_hover
-    sign_out_btn.on_click = lambda _: on_sign_out() if on_sign_out else None
 
     # ── Account info row ──────────────────────────────────────────────────────
     avatar = (

@@ -1,4 +1,5 @@
 import flet as ft
+import threading
 from datetime import datetime
 from config import DARK, PRIORITY_COLORS, PRIORITY_BG, PRIORITY_BG_DK, PROJECT_PALETTE
 from storage import (read_projects, write_project, delete_project_file, now_str, slug,
@@ -100,15 +101,6 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
                 bb["btn"].update()
         btn.on_click = on_click
 
-        def on_hover(e, b=btn, k=key):
-            try:
-                if current_pri[0] != k:
-                    m = pri_meta[k]
-                    b.bgcolor = (m["bg_d"] if th == DARK else m["bg_l"]) if e.data == "true" else "transparent"
-                    b.update()
-            except Exception:
-                pass
-        btn.on_hover = on_hover
         pri_btns[key] = {"btn": btn, "ic": ic, "lbl": lbl}
         return btn
 
@@ -552,20 +544,30 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             border_radius=10,
             on_click=lambda _, i=task_idx: _open_task_edit(proj, i, refresh_fn),
         )
-        def row_hover(e):
-            try:
-                if row.page is None:
-                    return
-                row.bgcolor = th["nav_hover"] if e.data == "true" else "transparent"
-                row.update()
-            except Exception:
-                pass
-        row.on_hover = row_hover
         return row
 
     def _open_task_edit(proj, task_idx, refresh_fn):
         proj["_active_task_idx"] = task_idx
-        render_detail_debounced(delay=0)
+        _show_loading()
+        threading.Thread(target=render_detail, daemon=True).start()
+
+    # ── Loading spinner ───────────────────────────────────────────────────────
+    def _show_loading():
+        """Replace detail panel content with an animated bouncing-dot spinner."""
+        detail_col.controls = [ft.Container(
+            content=ft.Column([
+                ft.ProgressRing(
+                    width=28, height=28, stroke_width=3,
+                    color=th["accent"],
+                ),
+                ft.Text("Loading…", size=12, color=th["text3"]),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+               alignment=ft.MainAxisAlignment.CENTER,
+               spacing=10),
+            expand=True, alignment=ft.Alignment.CENTER,
+        )]
+        try: page.update()
+        except Exception: pass
 
     # ── Debounced render to avoid rapid successive full rebuilds ─────────────
     _render_timer = [None]
@@ -581,7 +583,9 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     # ── Detail panel ──────────────────────────────────────────────────────────
     def open_project(idx):
         selected_idx[0] = idx
-        render_list(); render_detail()
+        render_list()
+        _show_loading()
+        threading.Thread(target=render_detail, daemon=True).start()
 
     def empty_detail():
         detail_col.controls = [ft.Container(
@@ -871,17 +875,9 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             border=ft.Border.all(1, th["accent"] if is_sel else th["border"]),
             on_click=lambda e, i=idx: open_project(i),
             animate=ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT),
+            ink=True,
+            ink_color=th["accent"] + "18",
         )
-        def on_hover(e, c=card_inner, i=idx):
-            try:
-                if c.page is None:
-                    return
-                if selected_idx[0] != i:
-                    c.bgcolor = th["nav_hover"] if e.data == "true" else th["card"]
-                    c.update()
-            except Exception:
-                pass
-        card_inner.on_hover = on_hover
 
         def on_accept(e, target_idx=idx):
             src = drag_src[0]
@@ -922,17 +918,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         )
 
     def render_list():
-        # Detach hover handlers from old controls before discarding them,
-        # so Flet doesn't fire events on controls no longer in the page tree.
-        for ctrl in list_col.controls:
-            try:
-                # DragTarget wraps a Draggable wraps card_inner, or just card_inner
-                draggable = getattr(ctrl, "content", None)
-                card = getattr(draggable, "content", None) or draggable
-                if card is not None:
-                    card.on_hover = None
-            except Exception:
-                pass
         list_col.controls = [small_project_card(i) for i in sorted_project_indices()]
         page.update()
 

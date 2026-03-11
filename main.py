@@ -14,31 +14,36 @@ from ui_home import build_home_screen
 from ui_projects import build_projects_screen
 from ui_settings import build_settings_screen
 
-import flet.messaging.session as _flet_session
+try:
+    import flet.messaging.session as _flet_session
 
-_orig_dispatch = _flet_session.Session.dispatch_event
-_orig_after    = _flet_session.Session.after_event
+    _orig_dispatch = _flet_session.Session.dispatch_event
+    _orig_after    = _flet_session.Session.after_event
 
-async def _safe_dispatch(self, control, event_name, event_data):
-    try:
-        await _orig_dispatch(self, control, event_name, event_data)
-    except RuntimeError as e:
-        if "Control must be added to the page first" in str(e):
-            pass
-        else:
-            raise
+    async def _safe_dispatch(self, control, event_name, event_data):
+        try:
+            await _orig_dispatch(self, control, event_name, event_data)
+        except Exception as e:
+            if "Control must be added to the page first" in str(e):
+                pass
+            else:
+                raise
 
-async def _safe_after(self, control):
-    try:
-        await _orig_after(self, control)
-    except RuntimeError as e:
-        if "Control must be added to the page first" in str(e):
-            pass
-        else:
-            raise
+    async def _safe_after(self, control):
+        try:
+            await _orig_after(self, control)
+        except Exception as e:
+            if "Control must be added to the page first" in str(e):
+                pass
+            else:
+                raise
 
-_flet_session.Session.dispatch_event = _safe_dispatch
-_flet_session.Session.after_event    = _safe_after
+    _flet_session.Session.dispatch_event = _safe_dispatch
+    _flet_session.Session.after_event    = _safe_after
+except Exception:
+    # Module path differs in some Flet versions / frozen exes — skip patching.
+    # Individual hover handlers already guard with `control.page is None`.
+    pass
 
 
 def main(page: ft.Page):
@@ -128,26 +133,29 @@ def main(page: ft.Page):
             )
 
             def make_btn(label, color_val, outline, on_click_fn):
-                lbl = ft.Text(label, size=11, weight=ft.FontWeight.W_600,
-                              color="#FFFFFF" if not outline else color_val)
-                c = ft.Container(
-                    content=lbl,
-                    bgcolor=color_val if not outline else "transparent",
-                    border=ft.Border.all(1, color_val),
-                    border_radius=6,
-                    padding=ft.Padding.symmetric(vertical=5, horizontal=12),
+                if outline:
+                    btn_style = ft.ButtonStyle(
+                        color={ft.ControlState.DEFAULT: color_val, ft.ControlState.HOVERED: "#FFFFFF"},
+                        bgcolor={ft.ControlState.DEFAULT: "transparent", ft.ControlState.HOVERED: color_val},
+                        side={ft.ControlState.DEFAULT: ft.BorderSide(1, color_val), ft.ControlState.HOVERED: ft.BorderSide(1, color_val)},
+                        overlay_color=ft.Colors.TRANSPARENT,
+                        padding=ft.Padding.symmetric(vertical=5, horizontal=12),
+                        shape=ft.RoundedRectangleBorder(radius=6),
+                    )
+                else:
+                    btn_style = ft.ButtonStyle(
+                        color={ft.ControlState.DEFAULT: "#FFFFFF", ft.ControlState.HOVERED: color_val},
+                        bgcolor={ft.ControlState.DEFAULT: color_val, ft.ControlState.HOVERED: "transparent"},
+                        side={ft.ControlState.DEFAULT: ft.BorderSide(1, color_val), ft.ControlState.HOVERED: ft.BorderSide(1, color_val)},
+                        overlay_color=ft.Colors.TRANSPARENT,
+                        padding=ft.Padding.symmetric(vertical=5, horizontal=12),
+                        shape=ft.RoundedRectangleBorder(radius=6),
+                    )
+                return ft.ElevatedButton(
+                    content=ft.Text(label, size=11, weight=ft.FontWeight.W_600),
+                    style=btn_style,
                     on_click=on_click_fn,
                 )
-                def hov(e, _c=c, _lbl=lbl, _cv=color_val, _out=outline):
-                    try:
-                        h = e.data == "true"
-                        _c.bgcolor   = "transparent" if (h and not _out) else (_cv if not _out else (_cv if h else "transparent"))
-                        _lbl.color   = _cv if (h and not _out) else ("#FFFFFF" if not _out else (_cv if not h else "#FFFFFF"))
-                        page.update()
-                    except Exception:
-                        pass
-                c.on_hover = hov
-                return c
 
             def do_accept(e, iid=inv_id):
                 def run():
@@ -273,14 +281,9 @@ def main(page: ft.Page):
             on_click=lambda _: _toggle_notif(),
             border_radius=8,
             padding=0,
+            ink=True,
+            ink_color=th["accent"] + "22",
         )
-        def bell_hover(e):
-            try:
-                bell_btn.bgcolor = th["nav_hover"] if e.data == "true" else "transparent"
-                bell_btn.update()
-            except Exception:
-                pass
-        bell_btn.on_hover = bell_hover
 
         # ── Theme / navigation helpers ────────────────────────────────────────
         def apply_theme():
