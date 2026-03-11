@@ -38,7 +38,7 @@ def role_pill(role: str, th) -> ft.Container:
 
 
 def build_members_panel(proj: dict, session: dict, th, page: ft.Page,
-                        on_close, dlg: ft.AlertDialog) -> ft.Container:
+                        on_close, dlg=None) -> ft.Container:
     """
     Full members management panel shown as a modal sheet.
     session = logged-in user's {uid, display_name, email, ...}

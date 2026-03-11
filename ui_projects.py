@@ -439,9 +439,28 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
 def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str = "you", session: dict = None) -> ft.Row:
     projects     = read_projects()
     selected_idx = [None]
-    detail_col   = ft.Column([], spacing=0, expand=True)
     list_col     = ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
     dlg          = ft.AlertDialog(modal=True)
+
+    # ── Detail area: Stack with a persistent spinner overlay ──────────────────
+    # The spinner is always in the tree — we just toggle .visible.
+    # This means one page.update() shows it instantly with no threading needed.
+    detail_col = ft.Column([], spacing=0, expand=True)
+    _spinner = ft.Container(
+        content=ft.ProgressRing(width=36, height=36, stroke_width=3, color=th["accent"]),
+        expand=True, alignment=ft.Alignment.CENTER,
+        visible=False,
+        bgcolor=th["bg"],   # covers detail_col content while loading
+    )
+    detail_stack = ft.Stack([detail_col, _spinner], expand=True)
+
+    def _show_spinner():
+        _spinner.visible = True
+        page.update()  # used by _open_task_edit which doesn't batch
+
+    def _hide_spinner():
+        _spinner.visible = False
+        # no page.update() here — caller does it after setting detail_col.controls
 
     # Alias to avoid closure shadowing issues with the 'refresh_home' parameter
     _do_refresh_home = refresh_home
@@ -486,21 +505,32 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     def task_row_widget(proj, task_idx, refresh_fn):
         task = proj["tasks"][task_idx]
 
-        # Ensure subtasks list exists
         if not isinstance(task.get("subtasks"), list):
             task["subtasks"] = []
 
         sub_total = len(task["subtasks"])
         sub_done  = sum(1 for s in task["subtasks"] if s["done"])
 
+        # Keep refs to mutable text nodes so toggle_done can update them in-place
+        title_text = ft.Text(
+            task["text"], size=13, weight=ft.FontWeight.W_500,
+            color=th["task_done_text"] if task["done"] else th["text"],
+        )
+
         def toggle_done(e):
             task["done"] = e.control.value
-            write_project(proj); render_detail_debounced(); _do_refresh_home()
+            # Update just the text color — no full rebuild, no hang
+            title_text.color = th["task_done_text"] if task["done"] else th["text"]
+            title_text.update()
+            write_project(proj)
+            _do_refresh_home()
 
         def ask_del(e):
             def do():
                 proj["tasks"].pop(task_idx)
-                write_project(proj); render_detail_debounced(); _do_refresh_home()
+                write_project(proj)
+                render_detail()   # row count changed, full rebuild needed
+                _do_refresh_home()
                 _toast("Task deleted", success=False)
             _confirm("Delete task?", f'Remove "{task["text"]}"?', "Delete", do)
 
@@ -526,8 +556,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                 ft.Checkbox(value=task["done"], active_color=th["success"],
                             on_change=toggle_done),
                 ft.Column([
-                    ft.Text(task["text"], size=13, weight=ft.FontWeight.W_500,
-                            color=th["task_done_text"] if task["done"] else th["text"]),
+                    title_text,
                     ft.Row([
                         *([ft.Text(task["desc"], size=11, color=th["text3"], max_lines=1)]
                           if task.get("desc") else []),
@@ -548,44 +577,21 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
 
     def _open_task_edit(proj, task_idx, refresh_fn):
         proj["_active_task_idx"] = task_idx
-        _show_loading()
-        threading.Thread(target=render_detail, daemon=True).start()
+        _show_spinner()
+        render_detail()
 
-    # ── Loading spinner ───────────────────────────────────────────────────────
-    def _show_loading():
-        """Replace detail panel content with an animated bouncing-dot spinner."""
-        detail_col.controls = [ft.Container(
-            content=ft.Column([
-                ft.ProgressRing(
-                    width=28, height=28, stroke_width=3,
-                    color=th["accent"],
-                ),
-                ft.Text("Loading…", size=12, color=th["text3"]),
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-               alignment=ft.MainAxisAlignment.CENTER,
-               spacing=10),
-            expand=True, alignment=ft.Alignment.CENTER,
-        )]
-        try: page.update()
-        except Exception: pass
-
-    # ── Debounced render to avoid rapid successive full rebuilds ─────────────
-    _render_timer = [None]
-
-    def render_detail_debounced(delay=0.08):
-        """Schedule a render_detail call; cancel any pending one first."""
-        if _render_timer[0] is not None:
-            _render_timer[0].cancel()
-        t = threading.Timer(delay, render_detail)
-        _render_timer[0] = t
-        t.start()
+    def render_detail_debounced():
+        render_detail()
 
     # ── Detail panel ──────────────────────────────────────────────────────────
     def open_project(idx):
         selected_idx[0] = idx
+        # Update selection highlight on cards + show spinner in a single update
         render_list()
-        _show_loading()
-        threading.Thread(target=render_detail, daemon=True).start()
+        _spinner.visible = True
+        page.update()
+        # Now build detail — spinner is already visible
+        render_detail()
 
     def empty_detail():
         detail_col.controls = [ft.Container(
@@ -599,10 +605,9 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         )]
 
     def render_detail():
-        detail_col.controls.clear()
         idx = selected_idx[0]
         if idx is None or idx >= len(projects):
-            empty_detail(); page.update(); return
+            empty_detail(); _hide_spinner(); page.update(); return
 
         proj = projects[idx]
 
@@ -613,12 +618,14 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             detail_col.controls = [
                 build_task_edit_window(proj, ti, back, th, page, username)
             ]
+            _hide_spinner()
             page.update(); return
 
         tasks = proj["tasks"]
         total = len(tasks)
         done  = sum(t["done"] for t in tasks)
         pct   = int(done / total * 100) if total else 0
+        uid   = (session or {}).get("uid", "")
 
         new_task_tf = ft.TextField(
             hint_text="New task…", border_color=th["border2"],
@@ -657,8 +664,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             ],
         )
 
-        uid = (session or {}).get("uid", "")
-
         def add_task(e):
             if not can(proj, uid, CAN_ADD_TASKS):
                 _toast("You don't have permission to add tasks.", success=False); return
@@ -685,8 +690,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             def do():
                 proj_name = proj["name"]
                 delete_project_file(proj)
-                # delete_project_file already removes proj from the cache list (projects).
-                # We must NOT call projects.pop() again or we'd remove a different project.
                 selected_idx[0] = None
                 render_list()
                 empty_detail()
@@ -701,35 +704,41 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                                  th, page, color=th["danger"], outline=True)
         del_proj_btn.visible = can(proj, uid, CAN_DELETE_PROJECT)
 
-        members_dlg = ft.AlertDialog(modal=False, title=ft.Text(""))
+        # Members overlay — ft.Stack on page.overlay, no AlertDialog animation
+        members_panel_content = build_members_panel(
+            proj, session or {"uid": "", "display_name": username, "email": ""},
+            th, page,
+            on_close=lambda: _close_members(),
+        )
+        members_overlay = ft.Stack([
+            # dim backdrop — clicking it closes the panel
+            ft.Container(
+                expand=True,
+                bgcolor="#00000066",
+                on_click=lambda e: _close_members(),
+            ),
+            # centred card
+            ft.Container(
+                content=members_panel_content,
+                alignment=ft.Alignment.CENTER,
+                expand=True,
+            ),
+        ], expand=True, visible=False)
+
+        # Add to page overlay once; re-use on every open
+        if members_overlay not in page.overlay:
+            page.overlay.append(members_overlay)
+
+        def _close_members():
+            members_overlay.visible = False
+            page.update()
 
         def show_members(e):
-            members_dlg.content = build_members_panel(
-                proj, session or {"uid": "", "display_name": username, "email": ""},
-                th, page,
-                on_close=lambda: (
-                    setattr(members_dlg, "open", False), page.update()
-                ),
-                dlg=members_dlg,
-            )
-            members_dlg.bgcolor = "transparent"
-            members_dlg.shadow  = False
-            members_dlg.title   = ft.Text("")
-            if members_dlg not in page.overlay:
-                page.overlay.append(members_dlg)
-            members_dlg.open = True
+            members_overlay.visible = True
             page.update()
 
         share_btn = hover_btn("Members", ft.Icons.GROUP_ROUNDED, show_members,
                               th, page, outline=True)
-
-        task_list = ft.Column(
-            [task_row_widget(proj, i, render_detail_debounced) for i in range(len(tasks))],
-            scroll=ft.ScrollMode.AUTO, expand=True,
-        )
-        empty_msg = [] if tasks else [ft.Container(
-            content=ft.Text("No tasks yet — add one below.", size=12, color=th["text3"]),
-            padding=ft.Padding.symmetric(vertical=8))]
 
         detail_col.controls = [ft.Container(
             content=ft.Column([
@@ -751,7 +760,12 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                     *([ft.Text(f"Updated {proj['updated']}", size=10, color=th["text3"])] if proj.get("updated") else []),
                 ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Divider(height=1, color=th["divider"]),
-                ft.Column([*empty_msg, task_list], expand=True),
+                ft.Column([
+                    *( [] if tasks else [ft.Container(
+                        content=ft.Text("No tasks yet — add one below.", size=12, color=th["text3"]),
+                        padding=ft.Padding.symmetric(vertical=8))]),
+                    *[task_row_widget(proj, i, render_detail_debounced) for i in range(len(tasks))],
+                ], scroll=ft.ScrollMode.AUTO, expand=True),
                 ft.Divider(height=1, color=th["divider"]),
                 ft.Text("Add task", size=12, color=th["text3"], weight=ft.FontWeight.W_600),
                 ft.Row([new_task_tf, pri_dd], spacing=8,
@@ -761,6 +775,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             ], expand=True),
             padding=28, expand=True,
         )]
+        _hide_spinner()
         page.update()
 
     # ── New project modal ─────────────────────────────────────────────────────
@@ -919,7 +934,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
 
     def render_list():
         list_col.controls = [small_project_card(i) for i in sorted_project_indices()]
-        page.update()
 
     # ── Sort dropdown (defined here so render_list is already in scope) ───────
     sort_lbl = ft.Text("Manual", size=11, weight=ft.FontWeight.W_500, color=th["text2"])
@@ -982,5 +996,5 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         width=248, padding=20, bgcolor=th["sidebar"],
         border=ft.Border.only(right=ft.BorderSide(1, th["border"])),
     )
-    return ft.Row([left_panel, ft.Container(content=detail_col, expand=True)],
+    return ft.Row([left_panel, ft.Container(content=detail_stack, expand=True)],
                   spacing=0, expand=True)
