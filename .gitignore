@@ -8,3 +8,5 @@ __pycache__/
 *.spec
 *.pyc
 "@ | Out-File -Encoding utf8 .gitignore
+session.json
+dist/
