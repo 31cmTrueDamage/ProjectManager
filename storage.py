@@ -2,37 +2,58 @@ import os, sys, json, re, copy, threading
 from datetime import datetime
 from dotenv import load_dotenv
 from pymongo import MongoClient
-from bson import ObjectId
 
-# ── Load .env (MONGODB_URI lives here) ───────────────────────────────────────
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
-
 SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 
-# ── MongoDB connection ────────────────────────────────────────────────────────
-_client     = None
-_db         = None
-_col        = None   # projects collection
-_col_lock   = threading.Lock()
+# ── Roles ─────────────────────────────────────────────────────────────────────
+ROLES        = ["owner", "editor", "viewer"]
+ROLE_LABELS  = {"owner": "Owner", "editor": "Editor", "viewer": "Viewer"}
 
-def _get_col():
-    """Lazy-connect and return the projects collection."""
-    global _client, _db, _col
-    if _col is None:
-        uri     = os.getenv("MONGODB_URI")
+# Permissions per role
+CAN_DELETE_PROJECT = {"owner"}
+CAN_MANAGE_MEMBERS = {"owner"}
+CAN_EDIT_TASKS     = {"owner", "editor"}
+CAN_ADD_TASKS      = {"owner", "editor"}
+CAN_ADD_NOTES      = {"owner", "editor"}
+
+def get_role(proj: dict, uid: str) -> str:
+    """Return the role of uid in proj. Returns 'viewer' if member but no role set."""
+    if proj.get("owner_uid") == uid:
+        return "owner"
+    for m in proj.get("members", []):
+        if m.get("uid") == uid:
+            return m.get("role", "viewer")
+    return "viewer"
+
+def can(proj: dict, uid: str, permission: set) -> bool:
+    return get_role(proj, uid) in permission
+
+
+# ── MongoDB ───────────────────────────────────────────────────────────────────
+_client = _db = _projects_col = _invites_col = _users_col = None
+_col_lock = threading.Lock()
+
+def _get_db():
+    global _client, _db, _projects_col, _invites_col, _users_col
+    if _db is None:
+        uri = os.getenv("MONGODB_URI")
         if not uri:
-            raise RuntimeError("MONGODB_URI not set — add it to your .env file.")
-        _client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        _db     = _client["projectmanager"]
-        _col    = _db["projects"]
-        # Index on order field for fast sorted reads
-        _col.create_index("order")
-    return _col
+            raise RuntimeError("MONGODB_URI not set in .env")
+        _client       = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        _db           = _client["projectmanager"]
+        _projects_col = _db["projects"]
+        _invites_col  = _db["invitations"]
+        _users_col    = _db["users"]
+        _projects_col.create_index("order")
+        _invites_col.create_index("to_email")
+        _users_col.create_index("email", unique=True)
+    return _db
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -43,7 +64,6 @@ def slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "project"
 
 def _parse_notes(raw) -> list:
-    """Normalize notes — always returns a list of {author, time, text} dicts."""
     if not raw:
         return []
     if isinstance(raw, list):
@@ -54,22 +74,16 @@ def _parse_notes(raw) -> list:
             return parsed
     except Exception:
         pass
-    if str(raw).strip():
-        return [{"author": "?", "time": "", "text": str(raw).strip()}]
-    return []
+    return [{"author": "?", "time": "", "text": str(raw).strip()}] if str(raw).strip() else []
 
 def _to_doc(proj: dict) -> dict:
-    """Convert an in-memory project dict to a MongoDB document."""
     doc = copy.deepcopy(proj)
-    # Store _id as the slug-based file key so upserts are idempotent
     doc["_id"] = doc.pop("file")
-    # Normalise notes on every task
     for t in doc.get("tasks", []):
         t["notes"] = _parse_notes(t.get("notes"))
     return doc
 
 def _from_doc(doc: dict) -> dict:
-    """Convert a MongoDB document back to an in-memory project dict."""
     proj = dict(doc)
     proj["file"] = proj.pop("_id")
     for t in proj.get("tasks", []):
@@ -77,7 +91,7 @@ def _from_doc(doc: dict) -> dict:
     return proj
 
 
-# ── Settings (still local — per-user preference) ──────────────────────────────
+# ── Settings ──────────────────────────────────────────────────────────────────
 def load_settings() -> dict:
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -92,19 +106,47 @@ def save_settings(data: dict) -> None:
         json.dump(data, f, indent=2)
 
 
-# ── In-memory cache ───────────────────────────────────────────────────────────
-_cache = None
+# ── Users ─────────────────────────────────────────────────────────────────────
+def upsert_user(session: dict) -> None:
+    try:
+        db = _get_db()
+        db["users"].replace_one(
+            {"uid": session["uid"]},
+            {"uid": session["uid"], "display_name": session.get("display_name", ""),
+             "email": session.get("email", ""), "photo_url": session.get("photo_url", "")},
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"[storage] upsert_user error: {e}")
 
-def _load_from_db() -> list:
-    col = _get_col()
-    docs = col.find({}, sort=[("order", 1)])
-    return [_from_doc(d) for d in docs]
+def lookup_user_by_email(email: str) -> dict | None:
+    try:
+        doc = _get_db()["users"].find_one({"email": email.lower().strip()})
+        if doc:
+            return {"uid": doc["uid"], "display_name": doc.get("display_name", email),
+                    "email": doc["email"], "photo_url": doc.get("photo_url", "")}
+    except Exception as e:
+        print(f"[storage] lookup_user error: {e}")
+    return None
+
+
+# ── In-memory project cache ───────────────────────────────────────────────────
+_cache       = None
+_current_uid = None
+
+def set_current_user(uid: str) -> None:
+    global _current_uid, _cache
+    if _current_uid != uid:
+        _current_uid = uid
+        _cache = None
 
 def read_projects() -> list:
-    """Return in-memory project list, fetching from MongoDB on first call."""
     global _cache
     if _cache is None:
-        _cache = _load_from_db()
+        db = _get_db()
+        query = {"$or": [{"owner_uid": _current_uid},
+                         {"members.uid": _current_uid}]} if _current_uid else {}
+        _cache = [_from_doc(d) for d in db["projects"].find(query, sort=[("order", 1)])]
     return _cache
 
 def invalidate_cache() -> None:
@@ -112,50 +154,141 @@ def invalidate_cache() -> None:
     _cache = None
 
 
-# ── Async write helpers ───────────────────────────────────────────────────────
-def _upsert(snapshot: dict) -> None:
-    """Upsert a single project document. Runs in a background thread."""
+# ── Project writes ────────────────────────────────────────────────────────────
+def _upsert_proj(snapshot: dict) -> None:
     try:
-        col = _get_col()
         doc = _to_doc(snapshot)
         with _col_lock:
-            col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+            _get_db()["projects"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     except Exception as e:
         print(f"[storage] write error: {e}")
 
-def _delete(file_id: str) -> None:
-    """Delete a project document by its _id. Runs in a background thread."""
+def _delete_proj(file_id: str) -> None:
     try:
-        col = _get_col()
         with _col_lock:
-            col.delete_one({"_id": file_id})
+            _get_db()["projects"].delete_one({"_id": file_id})
     except Exception as e:
         print(f"[storage] delete error: {e}")
 
-
-# ── Public API ────────────────────────────────────────────────────────────────
 def write_project(proj: dict, touch: bool = True) -> None:
-    """Update project in memory instantly, sync to MongoDB in background."""
     if touch:
         proj["updated"] = now_str()
+    if not proj.get("owner_uid") and _current_uid:
+        proj["owner_uid"] = _current_uid
+    proj.setdefault("members", [])
     snapshot = copy.deepcopy(proj)
-    threading.Thread(target=_upsert, args=(snapshot,), daemon=True).start()
+    threading.Thread(target=_upsert_proj, args=(snapshot,), daemon=True).start()
 
 def delete_project_file(proj: dict) -> None:
-    """Remove project from cache and delete from MongoDB."""
     global _cache
     cache = read_projects()
     if proj in cache:
         cache.remove(proj)
-    file_id = proj.get("file")
-    if file_id:
-        threading.Thread(target=_delete, args=(file_id,), daemon=True).start()
+    if fid := proj.get("file"):
+        threading.Thread(target=_delete_proj, args=(fid,), daemon=True).start()
 
 def get_stats() -> tuple:
-    """Compute stats purely from memory — zero DB calls."""
     projects = read_projects()
     return (
         len(projects),
         sum(t["done"] for p in projects for t in p["tasks"]),
         sum(not t["done"] for p in projects for t in p["tasks"]),
     )
+
+
+# ── Members ───────────────────────────────────────────────────────────────────
+def set_member_role(proj: dict, uid: str, role: str) -> None:
+    """Change an existing member's role."""
+    for m in proj.get("members", []):
+        if m["uid"] == uid:
+            m["role"] = role
+            break
+    write_project(proj)
+
+def remove_member(proj: dict, uid: str) -> None:
+    """Demote member to viewer (they keep read access)."""
+    for m in proj.get("members", []):
+        if m["uid"] == uid:
+            m["role"] = "viewer"
+            break
+    write_project(proj)
+
+
+# ── Invitations ───────────────────────────────────────────────────────────────
+def send_invitation(proj: dict, from_session: dict, to_email: str, role: str) -> str:
+    """
+    Create a pending invitation. Returns 'ok', 'already_member', 'pending', or 'not_found'.
+    The invitee does NOT need to be registered yet — invite by email.
+    """
+    to_email = to_email.lower().strip()
+
+    # Already a member?
+    owner_email = from_session.get("email", "")
+    if to_email == owner_email.lower():
+        return "self"
+    if any(m.get("email", "").lower() == to_email for m in proj.get("members", [])):
+        return "already_member"
+
+    db = _get_db()
+    # Already a pending invite?
+    existing = db["invitations"].find_one({
+        "project_id": proj["file"], "to_email": to_email, "status": "pending"
+    })
+    if existing:
+        return "pending"
+
+    db["invitations"].insert_one({
+        "project_id":   proj["file"],
+        "project_name": proj["name"],
+        "project_color": proj.get("color", "#6366F1"),
+        "from_uid":     from_session["uid"],
+        "from_name":    from_session.get("display_name", "Someone"),
+        "to_email":     to_email,
+        "role":         role,
+        "status":       "pending",
+        "created":      now_str(),
+    })
+    return "ok"
+
+def get_pending_invitations(email: str) -> list:
+    """Return all pending invitations for the given email."""
+    try:
+        db = _get_db()
+        return list(db["invitations"].find(
+            {"to_email": email.lower().strip(), "status": "pending"}
+        ))
+    except Exception as e:
+        print(f"[storage] get_invitations error: {e}")
+        return []
+
+def respond_invitation(invite_id, accept: bool, session: dict) -> None:
+    """Accept or decline an invitation. On accept, adds user to project members."""
+    from bson import ObjectId
+    db = _get_db()
+    inv = db["invitations"].find_one({"_id": ObjectId(str(invite_id))})
+    if not inv:
+        return
+
+    status = "accepted" if accept else "declined"
+    db["invitations"].update_one(
+        {"_id": ObjectId(str(invite_id))},
+        {"$set": {"status": status}}
+    )
+
+    if accept:
+        proj_doc = db["projects"].find_one({"_id": inv["project_id"]})
+        if proj_doc:
+            proj = _from_doc(proj_doc)
+            members = proj.setdefault("members", [])
+            if not any(m["uid"] == session["uid"] for m in members):
+                members.append({
+                    "uid":          session["uid"],
+                    "display_name": session.get("display_name", ""),
+                    "email":        session.get("email", ""),
+                    "role":         inv.get("role", "viewer"),
+                })
+            write_project(proj, touch=False)
+            # Add to local cache
+            cache = read_projects()
+            if not any(p["file"] == proj["file"] for p in cache):
+                cache.append(proj)

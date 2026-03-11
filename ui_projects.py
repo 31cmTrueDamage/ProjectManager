@@ -1,9 +1,11 @@
 import flet as ft
-import os
 from datetime import datetime
 from config import DARK, PRIORITY_COLORS, PRIORITY_BG, PRIORITY_BG_DK, PROJECT_PALETTE
-from storage import read_projects, write_project, delete_project_file, now_str, slug, _parse_notes
+from storage import (read_projects, write_project, delete_project_file, now_str, slug,
+                     _parse_notes, can, CAN_DELETE_PROJECT, CAN_ADD_TASKS, CAN_EDIT_TASKS,
+                     CAN_ADD_NOTES, CAN_MANAGE_MEMBERS)
 from ui_components import pill, section_label, hover_btn, show_confirm, show_toast
+from ui_members import build_members_panel
 
 
 # ── Task edit window ───────────────────────────────────────────────────────────
@@ -287,7 +289,7 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
 
 
 # ── Projects screen ────────────────────────────────────────────────────────────
-def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str = "you") -> ft.Row:
+def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str = "you", session: dict = None) -> ft.Row:
     projects     = read_projects()
     selected_idx = [None]
     detail_col   = ft.Column([], spacing=0, expand=True)
@@ -423,6 +425,8 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         )
 
         def add_task(e):
+            if not can(proj, uid, CAN_ADD_TASKS):
+                _toast("You don't have permission to add tasks.", success=False); return
             txt = new_task_tf.value.strip()
             if not txt:
                 _toast("Task name is required.", success=False); return
@@ -440,20 +444,43 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                             padding=ft.Padding.symmetric(horizontal=20),
                             border_radius=8, height=38)
 
+        uid = (session or {}).get("uid", "")
+
         def ask_delete_project(e):
             def do():
                 delete_project_file(proj)
-                if proj in projects:
-                    projects.remove(proj)
-                selected_idx[0] = None
+                projects.pop(idx); selected_idx[0] = None
                 render_list(); empty_detail(); refresh_home(); page.update()
                 _toast(f'"{proj["name"]}" deleted', success=False)
             _confirm("Delete project?",
                      f'"{proj["name"]}" and all its tasks will be removed.',
                      "Delete Project", do)
 
+        # Only show delete to owner
         del_proj_btn = hover_btn("Delete", ft.Icons.DELETE_ROUNDED, ask_delete_project,
                                  th, page, color=th["danger"], outline=True)
+        del_proj_btn.visible = can(proj, uid, CAN_DELETE_PROJECT)
+
+        members_dlg = ft.AlertDialog(modal=False)
+
+        def show_members(e):
+            members_dlg.content = build_members_panel(
+                proj, session or {"uid": "", "display_name": username, "email": ""},
+                th, page,
+                on_close=lambda: (
+                    setattr(members_dlg, "open", False), page.update()
+                ),
+                dlg=members_dlg,
+            )
+            members_dlg.bgcolor = "transparent"
+            members_dlg.shadow  = False
+            if members_dlg not in page.overlay:
+                page.overlay.append(members_dlg)
+            members_dlg.open = True
+            page.update()
+
+        share_btn = hover_btn("Members", ft.Icons.GROUP_ROUNDED, show_members,
+                              th, page, outline=True)
 
         task_list = ft.Column(
             [task_row_widget(proj, i, render_detail) for i in range(len(tasks))],
@@ -470,6 +497,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                     ft.Text(proj["name"], size=20, weight=ft.FontWeight.BOLD,
                             color=th["text"], expand=True),
                     ft.Text(f"{pct}%", size=12, color=th["text3"]),
+                    share_btn,
                     del_proj_btn,
                 ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 *([ft.Text(proj["desc"], size=12, color=th["text2"])] if proj.get("desc") else []),
