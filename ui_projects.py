@@ -8,14 +8,58 @@ from ui_components import pill, section_label, hover_btn, show_confirm, show_toa
 from ui_members import build_members_panel
 
 
+# ── Subtask row widget ─────────────────────────────────────────────────────────
+def subtask_row_widget(task: dict, sub_idx: int, th: dict, page: ft.Page,
+                       username: str, on_change):
+    sub = task["subtasks"][sub_idx]
+
+    def toggle_done(e):
+        sub["done"] = e.control.value
+        sub["updated"] = now_str()
+        on_change()
+
+    def ask_del(e):
+        task["subtasks"].pop(sub_idx)
+        on_change()
+
+    creator_text = f"by {sub.get('created_by', '?')}"
+
+    row = ft.Container(
+        content=ft.Row([
+            ft.Container(width=20),  # indent
+            ft.Icon(ft.Icons.SUBDIRECTORY_ARROW_RIGHT_ROUNDED, size=14, color=th["text3"]),
+            ft.Checkbox(value=sub["done"], active_color=th["success"],
+                        on_change=toggle_done, width=20, height=20),
+            ft.Column([
+                ft.Text(sub["text"], size=12,
+                        weight=ft.FontWeight.W_500,
+                        color=th["task_done_text"] if sub["done"] else th["text"]),
+                ft.Text(creator_text, size=10, color=th["text3"]),
+            ], spacing=0, expand=True),
+            pill(sub["priority"], PRIORITY_COLORS[sub["priority"]],
+                 PRIORITY_BG_DK[sub["priority"]] if th == DARK else PRIORITY_BG[sub["priority"]]),
+            ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=16,
+                          icon_color=th["text3"], on_click=ask_del, tooltip="Delete subtask"),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        padding=ft.Padding.symmetric(vertical=2, horizontal=12),
+        border_radius=8,
+        bgcolor=th["bg"] if sub["done"] else "transparent",
+    )
+    return row
+
+
 # ── Task edit window ───────────────────────────────────────────────────────────
 def build_task_edit_window(proj: dict, task_idx: int, back_fn,
                            th: dict, page: ft.Page, username: str) -> ft.Container:
     task = proj["tasks"][task_idx]
 
-    # Ensure notes is always a list
+    # Ensure required fields exist
     if not isinstance(task.get("notes"), list):
         task["notes"] = _parse_notes(task.get("notes", ""))
+    if not isinstance(task.get("subtasks"), list):
+        task["subtasks"] = []
+    if not task.get("created_by"):
+        task["created_by"] = username
 
     # ── Priority selector ─────────────────────────────────────────────────────
     current_pri = [task["priority"]]
@@ -117,6 +161,102 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
         status_btn.update()
     status_btn.on_click = toggle_status
 
+    # ── Subtasks section ───────────────────────────────────────────────────────
+    subtasks_col = ft.Column([], spacing=4)
+
+    pri_map_sub     = {"HIGH": "🔴 High", "MED": "🟡 Med", "LOW": "🟢 Low"}
+    sub_pri_current = ["MED"]
+    sub_pri_label   = ft.Text(pri_map_sub["MED"], size=12, weight=ft.FontWeight.W_500, color=th["text"])
+    sub_pri_dd = ft.PopupMenuButton(
+        content=ft.Container(
+            content=ft.Row([sub_pri_label,
+                            ft.Icon(ft.Icons.ARROW_DROP_DOWN_ROUNDED, color=th["text3"], size=18)],
+                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            border=ft.Border.all(1, th["border2"]), border_radius=8,
+            bgcolor=th["input_bg"], height=36, width=110,
+            padding=ft.Padding.symmetric(horizontal=8),
+        ),
+        items=[
+            ft.PopupMenuItem(
+                content=ft.Text(v, size=12, color=th["text"]), data=k,
+                on_click=lambda e: (
+                    sub_pri_current.__setitem__(0, e.control.data),
+                    setattr(sub_pri_label, "value", pri_map_sub[e.control.data]),
+                    page.update(),
+                )
+            ) for k, v in pri_map_sub.items()
+        ],
+    )
+
+    sub_tf = ft.TextField(
+        hint_text="Add a subtask…",
+        border_color=th["border2"], bgcolor=th["input_bg"], color=th["text"],
+        text_size=12, height=36, expand=True,
+        content_padding=ft.Padding.symmetric(horizontal=12, vertical=0),
+        border_radius=8,
+    )
+
+    def refresh_subtasks_col():
+        subtasks_col.controls.clear()
+        for si in range(len(task["subtasks"])):
+            def _on_change(si=si):
+                write_project(proj)
+                refresh_subtasks_col()
+                try: page.update()
+                except Exception: pass
+            subtasks_col.controls.append(
+                subtask_row_widget(task, si, th, page, username, _on_change)
+            )
+        try: page.update()
+        except Exception: pass
+
+    def add_subtask(e):
+        txt = sub_tf.value.strip()
+        if not txt: return
+        task["subtasks"].append({
+            "text": txt,
+            "done": False,
+            "priority": sub_pri_current[0],
+            "created_by": username,
+            "created": now_str(),
+            "updated": "",
+        })
+        write_project(proj)
+        sub_tf.value = ""
+        refresh_subtasks_col()
+        try: page.update()
+        except Exception: pass
+
+    sub_add_btn = hover_btn("Add", ft.Icons.ADD_ROUNDED, add_subtask, th, page,
+                            padding=ft.Padding.symmetric(horizontal=16),
+                            border_radius=8, height=36)
+    sub_tf.on_submit = add_subtask
+
+    refresh_subtasks_col()
+
+    sub_done  = sum(1 for s in task["subtasks"] if s["done"])
+    sub_total = len(task["subtasks"])
+
+    subtasks_header_count = ft.Text(
+        f"{sub_done}/{sub_total}" if sub_total else "None",
+        size=11, color=th["text3"],
+    )
+
+    subtasks_section = ft.Container(
+        content=ft.Column([
+            ft.Row([
+                section_label("Subtasks", ft.Icons.ACCOUNT_TREE_OUTLINED, th),
+                subtasks_header_count,
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            subtasks_col,
+            ft.Row([sub_tf, sub_pri_dd, sub_add_btn], spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], spacing=10),
+        bgcolor=th["card"], border=ft.Border.all(1, th["border"]),
+        border_radius=12, padding=18,
+    )
+
     # ── Notes thread ──────────────────────────────────────────────────────────
     def note_bubble(n):
         is_me = n["author"] == username
@@ -144,7 +284,7 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
         )
 
     notes_col = ft.Column([note_bubble(n) for n in task["notes"]],
-                          spacing=8, scroll=ft.ScrollMode.AUTO, height=220)
+                          spacing=8, scroll=ft.ScrollMode.AUTO, height=200)
     note_input = ft.TextField(
         hint_text="Write a note…",
         border_color=th["border2"], bgcolor=th["input_bg"], color=th["text"],
@@ -199,6 +339,7 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
             "text": txt, "desc": desc_tf.value.strip(),
             "priority": current_pri[0], "done": done_state[0],
             "updated": now_str(), "created": task.get("created") or now_str(),
+            "created_by": task.get("created_by") or username,
         })
         write_project(proj)
         show_toast(page, th, "Task saved")
@@ -213,7 +354,7 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
     save_btn.on_click = save_task
     del_btn.on_click  = delete_task
 
-    # ── Timestamps card ───────────────────────────────────────────────────────
+    # ── Timestamps + creator card ─────────────────────────────────────────────
     def ts_row(label, value):
         return ft.Row([
             ft.Text(label, size=11, color=th["text3"], width=72),
@@ -224,6 +365,7 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
         content=ft.Column([
             section_label("History", ft.Icons.HISTORY_ROUNDED, th),
             ts_row("Created", task.get("created") or "—"),
+            ts_row("By", task.get("created_by") or "—"),
             ts_row("Updated", task.get("updated") or "—"),
         ], spacing=8),
         bgcolor=th["card"], border=ft.Border.all(1, th["border"]),
@@ -244,8 +386,20 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
             ft.Divider(height=1, color=th["divider"]),
             ft.Column([
                 ft.Text("Edit Task", size=22, weight=ft.FontWeight.W_700, color=th["text"]),
-                ft.Text(proj["name"], size=12, color=th["text3"]),
-            ], spacing=2),
+                ft.Row([
+                    ft.Text(proj["name"], size=12, color=th["text3"]),
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.PERSON_OUTLINE_ROUNDED, size=12, color=th["accent"]),
+                            ft.Text(f"Created by {task.get('created_by') or username}",
+                                    size=11, color=th["accent"]),
+                        ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        bgcolor=th["nav_sel_bg"],
+                        border_radius=20,
+                        padding=ft.Padding.symmetric(vertical=3, horizontal=10),
+                    ),
+                ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ], spacing=4),
             ft.Container(
                 content=ft.Column([
                     section_label("Task Details", ft.Icons.EDIT_OUTLINED, th),
@@ -272,6 +426,7 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
                     border_radius=12, padding=18, expand=1,
                 ),
             ], spacing=12),
+            subtasks_section,
             ft.Container(
                 content=ft.Column([
                     section_label("Notes", ft.Icons.NOTES_ROUNDED, th),
@@ -283,7 +438,7 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
             ft.Row([del_btn, ft.Container(expand=True), ts_card,
                     ft.Container(expand=True), save_btn],
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        ], spacing=14, expand=True),
+        ], spacing=14, expand=True, scroll=ft.ScrollMode.AUTO),
         padding=28, expand=True,
     )
 
@@ -306,6 +461,13 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     def task_row_widget(proj, task_idx, refresh_fn):
         task = proj["tasks"][task_idx]
 
+        # Ensure subtasks list exists
+        if not isinstance(task.get("subtasks"), list):
+            task["subtasks"] = []
+
+        sub_total = len(task["subtasks"])
+        sub_done  = sum(1 for s in task["subtasks"] if s["done"])
+
         def toggle_done(e):
             task["done"] = e.control.value
             write_project(proj); refresh_fn(); refresh_home()
@@ -317,6 +479,23 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                 _toast("Task deleted", success=False)
             _confirm("Delete task?", f'Remove "{task["text"]}"?', "Delete", do)
 
+        creator_badge = ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.PERSON_OUTLINE_ROUNDED, size=10, color=th["text3"]),
+                ft.Text(task.get("created_by") or "?", size=10, color=th["text3"]),
+            ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        )
+
+        sub_badge = ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.Icons.ACCOUNT_TREE_OUTLINED, size=10,
+                        color=th["success"] if sub_total > 0 and sub_done == sub_total else th["text3"]),
+                ft.Text(f"{sub_done}/{sub_total}", size=10,
+                        color=th["success"] if sub_total > 0 and sub_done == sub_total else th["text3"]),
+            ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            visible=sub_total > 0,
+        )
+
         row = ft.Container(
             content=ft.Row([
                 ft.Checkbox(value=task["done"], active_color=th["success"],
@@ -324,9 +503,13 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                 ft.Column([
                     ft.Text(task["text"], size=13, weight=ft.FontWeight.W_500,
                             color=th["task_done_text"] if task["done"] else th["text"]),
-                    *([ft.Text(task["desc"], size=11, color=th["text3"], max_lines=1)]
-                      if task.get("desc") else []),
-                ], spacing=0, expand=True),
+                    ft.Row([
+                        *([ft.Text(task["desc"], size=11, color=th["text3"], max_lines=1)]
+                          if task.get("desc") else []),
+                        creator_badge,
+                        sub_badge,
+                    ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ], spacing=2, expand=True),
                 pill(task["priority"], PRIORITY_COLORS[task["priority"]],
                      PRIORITY_BG_DK[task["priority"]] if th == DARK else PRIORITY_BG[task["priority"]]),
                 ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, icon_size=18,
@@ -424,6 +607,8 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             ],
         )
 
+        uid = (session or {}).get("uid", "")
+
         def add_task(e):
             if not can(proj, uid, CAN_ADD_TASKS):
                 _toast("You don't have permission to add tasks.", success=False); return
@@ -433,6 +618,8 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             proj["tasks"].append({
                 "text": txt, "done": False, "priority": current_pri[0],
                 "desc": new_desc_tf.value.strip(), "notes": [],
+                "subtasks": [],
+                "created_by": username,
                 "created": now_str(), "updated": "",
             })
             write_project(proj)
@@ -444,8 +631,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                             padding=ft.Padding.symmetric(horizontal=20),
                             border_radius=8, height=38)
 
-        uid = (session or {}).get("uid", "")
-
         def ask_delete_project(e):
             def do():
                 delete_project_file(proj)
@@ -456,7 +641,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                      f'"{proj["name"]}" and all its tasks will be removed.',
                      "Delete Project", do)
 
-        # Only show delete to owner
         del_proj_btn = hover_btn("Delete", ft.Icons.DELETE_ROUNDED, ask_delete_project,
                                  th, page, color=th["danger"], outline=True)
         del_proj_btn.visible = can(proj, uid, CAN_DELETE_PROJECT)
@@ -570,12 +754,13 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                 modal_err.visible = True; modal_err.update(); return
             modal_err.visible = False
             proj = {
-                "name":    name,
-                "color":   PROJECT_PALETTE[modal_color_idx[0]],
-                "created": datetime.now().strftime("%Y-%m-%d"),
-                "desc":    modal_desc_tf.value.strip(),
-                "tasks":   [],
-                "file":    slug(name) + ".md",
+                "name":       name,
+                "color":      PROJECT_PALETTE[modal_color_idx[0]],
+                "created":    datetime.now().strftime("%Y-%m-%d"),
+                "created_by": username,
+                "desc":       modal_desc_tf.value.strip(),
+                "tasks":      [],
+                "file":       slug(name) + ".md",
             }
             write_project(proj); projects.append(proj)
             new_proj_dlg.open = False; page.update()
