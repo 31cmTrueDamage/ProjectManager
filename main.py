@@ -5,7 +5,7 @@ import threading
 from config import DARK, LIGHT
 from storage import (
     load_settings, save_settings, BASE_DIR, set_current_user, upsert_user,
-    get_pending_invitations, respond_invitation, invalidate_cache,
+    get_pending_invitations, respond_invitation, invalidate_cache, prewarm_connection,
 )
 from auth import load_session, clear_session
 from ui_components import NavItem
@@ -13,6 +13,32 @@ from ui_login import build_login_screen
 from ui_home import build_home_screen
 from ui_projects import build_projects_screen
 from ui_settings import build_settings_screen
+
+import flet.messaging.session as _flet_session
+
+_orig_dispatch = _flet_session.Session.dispatch_event
+_orig_after    = _flet_session.Session.after_event
+
+async def _safe_dispatch(self, control, event_name, event_data):
+    try:
+        await _orig_dispatch(self, control, event_name, event_data)
+    except RuntimeError as e:
+        if "Control must be added to the page first" in str(e):
+            pass
+        else:
+            raise
+
+async def _safe_after(self, control):
+    try:
+        await _orig_after(self, control)
+    except RuntimeError as e:
+        if "Control must be added to the page first" in str(e):
+            pass
+        else:
+            raise
+
+_flet_session.Session.dispatch_event = _safe_dispatch
+_flet_session.Session.after_event    = _safe_after
 
 
 def main(page: ft.Page):
@@ -41,6 +67,8 @@ def main(page: ft.Page):
         save_settings(settings)
         set_current_user(session.get("uid", ""))
         threading.Thread(target=upsert_user, args=(session,), daemon=True).start()
+        # Pre-warm DB connection immediately so first project click is instant
+        threading.Thread(target=prewarm_connection, daemon=True).start()
         show_app(session)
 
     def show_app(session: dict):
@@ -56,7 +84,7 @@ def main(page: ft.Page):
         content_container = ft.Container(expand=True)
         current_screen    = ["Home"]
         settings_dirty    = [None]
-        unsaved_dlg       = ft.AlertDialog(modal=True)
+        unsaved_dlg = ft.AlertDialog(modal=True, title=ft.Text(""))
 
         # ── Notification state ────────────────────────────────────────────────
         pending_invites   = []   # list of raw mongo docs
@@ -406,6 +434,7 @@ def main(page: ft.Page):
     session = load_session()
     if session:
         set_current_user(session.get("uid", ""))
+        threading.Thread(target=prewarm_connection, daemon=True).start()
         show_app(session)
     else:
         show_login()

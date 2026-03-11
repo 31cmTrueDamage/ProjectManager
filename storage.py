@@ -38,21 +38,52 @@ def can(proj: dict, uid: str, permission: set) -> bool:
 # ── MongoDB ───────────────────────────────────────────────────────────────────
 _client = _db = _projects_col = _invites_col = _users_col = None
 _col_lock = threading.Lock()
+_db_lock  = threading.Lock()
+
+
+def _connect():
+    """Create a fresh MongoClient and wire up all collection references."""
+    global _client, _db, _projects_col, _invites_col, _users_col
+    uri = os.getenv("MONGODB_URI")
+    if not uri:
+        raise RuntimeError("MONGODB_URI not set in .env")
+    # socketTimeoutMS / connectTimeoutMS kept short so reconnects are fast.
+    # heartbeatFrequencyMS keeps the connection alive during idle periods so
+    # the first interaction after the app sits unused doesn't pay a full
+    # reconnect penalty (~1-3 s).
+    _client = MongoClient(
+        uri,
+        serverSelectionTimeoutMS=5000,
+        socketTimeoutMS=10000,
+        connectTimeoutMS=5000,
+        heartbeatFrequencyMS=10000,   # ping every 10 s — keeps connection warm
+        maxPoolSize=5,
+    )
+    _db           = _client["projectmanager"]
+    _projects_col = _db["projects"]
+    _invites_col  = _db["invitations"]
+    _users_col    = _db["users"]
+    _projects_col.create_index("order")
+    _invites_col.create_index("to_email")
+    _users_col.create_index("email", unique=True)
+
 
 def _get_db():
-    global _client, _db, _projects_col, _invites_col, _users_col
-    if _db is None:
-        uri = os.getenv("MONGODB_URI")
-        if not uri:
-            raise RuntimeError("MONGODB_URI not set in .env")
-        _client       = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        _db           = _client["projectmanager"]
-        _projects_col = _db["projects"]
-        _invites_col  = _db["invitations"]
-        _users_col    = _db["users"]
-        _projects_col.create_index("order")
-        _invites_col.create_index("to_email")
-        _users_col.create_index("email", unique=True)
+    global _db
+    with _db_lock:
+        if _db is None:
+            _connect()
+        else:
+            # Fast connectivity check — reconnect silently if the server
+            # dropped us while the app was left idle.
+            try:
+                _client.admin.command("ping")
+            except Exception:
+                try:
+                    _client.close()
+                except Exception:
+                    pass
+                _connect()
     return _db
 
 
@@ -169,6 +200,15 @@ def _delete_proj(file_id: str) -> None:
             _get_db()["projects"].delete_one({"_id": file_id})
     except Exception as e:
         print(f"[storage] delete error: {e}")
+
+def prewarm_connection() -> None:
+    """Call this in a daemon thread right after login so the first real
+    DB operation doesn't pay the connection-setup cost."""
+    try:
+        _get_db()
+    except Exception as e:
+        print(f"[storage] prewarm error: {e}")
+
 
 def write_project(proj: dict, touch: bool = True) -> None:
     if touch:

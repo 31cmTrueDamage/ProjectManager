@@ -503,12 +503,12 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
 
         def toggle_done(e):
             task["done"] = e.control.value
-            write_project(proj); refresh_fn(); _do_refresh_home()
+            write_project(proj); render_detail_debounced(); _do_refresh_home()
 
         def ask_del(e):
             def do():
                 proj["tasks"].pop(task_idx)
-                write_project(proj); refresh_fn(); _do_refresh_home()
+                write_project(proj); render_detail_debounced(); _do_refresh_home()
                 _toast("Task deleted", success=False)
             _confirm("Delete task?", f'Remove "{task["text"]}"?', "Delete", do)
 
@@ -554,6 +554,8 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         )
         def row_hover(e):
             try:
+                if row.page is None:
+                    return
                 row.bgcolor = th["nav_hover"] if e.data == "true" else "transparent"
                 row.update()
             except Exception:
@@ -563,7 +565,18 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
 
     def _open_task_edit(proj, task_idx, refresh_fn):
         proj["_active_task_idx"] = task_idx
-        refresh_fn()
+        render_detail_debounced(delay=0)
+
+    # ── Debounced render to avoid rapid successive full rebuilds ─────────────
+    _render_timer = [None]
+
+    def render_detail_debounced(delay=0.08):
+        """Schedule a render_detail call; cancel any pending one first."""
+        if _render_timer[0] is not None:
+            _render_timer[0].cancel()
+        t = threading.Timer(delay, render_detail)
+        _render_timer[0] = t
+        t.start()
 
     # ── Detail panel ──────────────────────────────────────────────────────────
     def open_project(idx):
@@ -582,24 +595,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         )]
 
     def render_detail():
-        # Detach hover handlers on any hover_btn containers before discarding them
-        def _clear_hovers(controls):
-            for c in controls:
-                try:
-                    c.on_hover = None
-                except Exception:
-                    pass
-                try:
-                    _clear_hovers(c.controls)
-                except Exception:
-                    pass
-                try:
-                    inner = getattr(c, "content", None)
-                    if inner:
-                        _clear_hovers([inner])
-                except Exception:
-                    pass
-        _clear_hovers(detail_col.controls)
         detail_col.controls.clear()
         idx = selected_idx[0]
         if idx is None or idx >= len(projects):
@@ -725,7 +720,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                               th, page, outline=True)
 
         task_list = ft.Column(
-            [task_row_widget(proj, i, render_detail) for i in range(len(tasks))],
+            [task_row_widget(proj, i, render_detail_debounced) for i in range(len(tasks))],
             scroll=ft.ScrollMode.AUTO, expand=True,
         )
         empty_msg = [] if tasks else [ft.Container(
@@ -879,6 +874,8 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         )
         def on_hover(e, c=card_inner, i=idx):
             try:
+                if c.page is None:
+                    return
                 if selected_idx[0] != i:
                     c.bgcolor = th["nav_hover"] if e.data == "true" else th["card"]
                     c.update()
