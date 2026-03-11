@@ -3,7 +3,7 @@ from datetime import datetime
 from config import DARK, PRIORITY_COLORS, PRIORITY_BG, PRIORITY_BG_DK, PROJECT_PALETTE
 from storage import (read_projects, write_project, delete_project_file, now_str, slug,
                      _parse_notes, can, CAN_DELETE_PROJECT, CAN_ADD_TASKS, CAN_EDIT_TASKS,
-                     CAN_ADD_NOTES, CAN_MANAGE_MEMBERS)
+                     CAN_ADD_NOTES, CAN_MANAGE_MEMBERS, invalidate_cache)
 from ui_components import pill, section_label, hover_btn, show_confirm, show_toast
 from ui_members import build_members_panel
 
@@ -449,7 +449,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     selected_idx = [None]
     detail_col   = ft.Column([], spacing=0, expand=True)
     list_col     = ft.Column([], spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
-    dlg          = ft.AlertDialog(modal=True)
+    dlg          = ft.AlertDialog(modal=True, title=ft.Text(""))
 
     def _confirm(title, msg, label, fn, danger=True):
         show_confirm(page, th, dlg, title, msg, label, fn, danger)
@@ -461,7 +461,6 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     def task_row_widget(proj, task_idx, refresh_fn):
         task = proj["tasks"][task_idx]
 
-        # Ensure subtasks list exists
         if not isinstance(task.get("subtasks"), list):
             task["subtasks"] = []
 
@@ -470,12 +469,14 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
 
         def toggle_done(e):
             task["done"] = e.control.value
-            write_project(proj); refresh_fn(); refresh_home()
+            write_project(proj)
+            refresh_fn()
 
         def ask_del(e):
             def do():
                 proj["tasks"].pop(task_idx)
-                write_project(proj); refresh_fn(); refresh_home()
+                write_project(proj)
+                refresh_fn()
                 _toast("Task deleted", success=False)
             _confirm("Delete task?", f'Remove "{task["text"]}"?', "Delete", do)
 
@@ -535,7 +536,8 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
     # ── Detail panel ──────────────────────────────────────────────────────────
     def open_project(idx):
         selected_idx[0] = idx
-        render_list(); render_detail()
+        render_list()
+        render_detail()
 
     def empty_detail():
         detail_col.controls = [ft.Container(
@@ -547,6 +549,13 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                alignment=ft.MainAxisAlignment.CENTER, spacing=6),
             expand=True, alignment=ft.Alignment.CENTER,
         )]
+
+    def do_refresh(e=None):
+        invalidate_cache()
+        projects.clear()
+        projects.extend(read_projects())
+        render_list()
+        render_detail()
 
     def render_detail():
         detail_col.controls.clear()
@@ -624,7 +633,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             })
             write_project(proj)
             new_task_tf.value = ""; new_desc_tf.value = ""
-            render_detail(); refresh_home()
+            render_detail()
             _toast("Task added")
 
         add_btn = hover_btn("Add", ft.Icons.ADD_ROUNDED, add_task, th, page,
@@ -635,7 +644,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             def do():
                 delete_project_file(proj)
                 projects.pop(idx); selected_idx[0] = None
-                render_list(); empty_detail(); refresh_home(); page.update()
+                render_list(); empty_detail(); page.update()
                 _toast(f'"{proj["name"]}" deleted', success=False)
             _confirm("Delete project?",
                      f'"{proj["name"]}" and all its tasks will be removed.',
@@ -667,6 +676,11 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         share_btn = hover_btn("Members", ft.Icons.GROUP_ROUNDED, show_members,
                               th, page, outline=True)
 
+        refresh_btn = hover_btn("Refresh", ft.Icons.REFRESH_ROUNDED, do_refresh,
+                                th, page, outline=True,
+                                padding=ft.Padding.symmetric(vertical=9, horizontal=14),
+                                border_radius=8)
+
         task_list = ft.Column(
             [task_row_widget(proj, i, render_detail) for i in range(len(tasks))],
             scroll=ft.ScrollMode.AUTO, expand=True,
@@ -682,6 +696,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                     ft.Text(proj["name"], size=20, weight=ft.FontWeight.BOLD,
                             color=th["text"], expand=True),
                     ft.Text(f"{pct}%", size=12, color=th["text3"]),
+                    refresh_btn,
                     share_btn,
                     del_proj_btn,
                 ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -718,11 +733,11 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         bgcolor=th["input_bg"], color=th["text"],
         label_style=ft.TextStyle(color=th["text3"]), text_size=13, height=50,
         content_padding=ft.Padding.symmetric(horizontal=14, vertical=0))
-    modal_err       = ft.Text("Project name is required.", size=11,
-                              color=th["danger"], visible=False)
-    modal_color_idx = [0]
+    modal_err        = ft.Text("Project name is required.", size=11,
+                               color=th["danger"], visible=False)
+    modal_color_idx  = [0]
     modal_color_dots = []
-    new_proj_dlg = ft.AlertDialog(modal=True, title=ft.Text(""))
+    new_proj_dlg     = ft.AlertDialog(modal=True, title=ft.Text(""))
 
     def make_color_dot(i):
         dot = ft.Container(
@@ -766,7 +781,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             write_project(proj); projects.append(proj)
             new_proj_dlg.open = False; page.update()
             render_list(); open_project(len(projects) - 1)
-            refresh_home(); _toast(f'"{name}" created')
+            _toast(f'"{name}" created')
 
         new_proj_dlg.title   = ft.Text("New Project", weight=ft.FontWeight.W_700, color=th["text"])
         new_proj_dlg.bgcolor = th["modal"]

@@ -126,9 +126,6 @@ def main(page: ft.Page):
                     respond_invitation(iid, True, session)
                     invalidate_cache()
                     _reload_invites()
-                    if current_screen[0] == "Projects":
-                        render_screen("Projects")
-                    refresh_home()
                     try: page.update()
                     except Exception: pass
                 threading.Thread(target=run, daemon=True).start()
@@ -268,11 +265,6 @@ def main(page: ft.Page):
             for item in nav_items:
                 item.set_theme(th)
 
-        def refresh_home():
-            if current_screen[0] == "Home":
-                render_screen("Home")
-                page.update()
-
         def render_screen(name):
             current_screen[0] = name
             settings_dirty[0] = None
@@ -281,7 +273,7 @@ def main(page: ft.Page):
                     go_to_projects, th, username, page)
             elif name == "Projects":
                 content_container.content = build_projects_screen(
-                    page, th, refresh_home, username, session=session)
+                    page, th, username, session=session)
             elif name == "Settings":
                 screen, dirty = build_settings_screen(
                     th, settings, on_settings_save, page,
@@ -397,20 +389,6 @@ def main(page: ft.Page):
 
         # Fetch invitations in background after first render
         threading.Thread(target=_reload_invites, daemon=True).start()
-
-        def _poll_live():
-            while True:
-                time.sleep(15)  # poll every 15 seconds
-                try:
-                    invalidate_cache()
-                    _reload_invites()
-                    if current_screen[0] in ("Home", "Projects"):
-                        render_screen(current_screen[0])
-                    page.update()
-                except Exception:
-                    pass
-
-        threading.Thread(target=_poll_live, daemon=True).start()
 
         app_row = ft.Row([sidebar, content_container], expand=True, spacing=0)
 
