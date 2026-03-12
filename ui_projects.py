@@ -706,6 +706,60 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         pct   = int(done / total * 100) if total else 0
         uid   = (session or {}).get("uid", "")
 
+        # ── Task sort state ───────────────────────────────────────────────────
+        TASK_SORT_OPTIONS = {
+            "manual":      "Manual",
+            "pri_high":    "Priority ↑",
+            "pri_low":     "Priority ↓",
+            "created_new": "Newest",
+            "created_old": "Oldest",
+            "status_done": "Done first",
+            "status_todo": "To Do first",
+            "status_prog": "In Progress first",
+        }
+        PRI_ORDER = {"HIGH": 0, "MED": 1, "LOW": 2}
+        STATUS_ORDER = {"done": 0, "in_progress": 1, "todo": 2}
+
+        task_sort_mode = ["manual"]
+
+        def _task_status(t):
+            if "status" in t: return t["status"]
+            return "done" if t.get("done") else "todo"
+
+        def sorted_task_indices():
+            indices = list(range(len(tasks)))
+            mode = task_sort_mode[0]
+            if mode == "pri_high":
+                indices.sort(key=lambda i: PRI_ORDER.get(tasks[i].get("priority", "MED"), 1))
+            elif mode == "pri_low":
+                indices.sort(key=lambda i: PRI_ORDER.get(tasks[i].get("priority", "MED"), 1), reverse=True)
+            elif mode == "created_new":
+                def _dt(i):
+                    raw = tasks[i].get("created", "")
+                    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                        try: return datetime.strptime(raw, fmt)
+                        except Exception: pass
+                    return datetime.min
+                indices.sort(key=_dt, reverse=True)
+            elif mode == "created_old":
+                def _dt(i):
+                    raw = tasks[i].get("created", "")
+                    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                        try: return datetime.strptime(raw, fmt)
+                        except Exception: pass
+                    return datetime.min
+                indices.sort(key=_dt)
+            elif mode == "status_done":
+                order = {"done": 0, "in_progress": 1, "todo": 2}
+                indices.sort(key=lambda i: order.get(_task_status(tasks[i]), 2))
+            elif mode == "status_todo":
+                order = {"todo": 0, "in_progress": 1, "done": 2}
+                indices.sort(key=lambda i: order.get(_task_status(tasks[i]), 2))
+            elif mode == "status_prog":
+                order = {"in_progress": 0, "todo": 1, "done": 2}
+                indices.sort(key=lambda i: order.get(_task_status(tasks[i]), 2))
+            return indices
+
         new_task_tf = ft.TextField(
             hint_text="New task…", border_color=th["border2"],
             bgcolor=th["input_bg"], color=th["text"],
@@ -764,6 +818,48 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         add_btn = hover_btn("Add", ft.Icons.ADD_ROUNDED, add_task, th, page,
                             padding=ft.Padding.symmetric(horizontal=20),
                             border_radius=8, height=38)
+
+        # ── Task sort dropdown ────────────────────────────────────────────────
+        task_sort_lbl = ft.Text("Manual", size=11, weight=ft.FontWeight.W_500, color=th["text2"])
+        task_list_col = ft.Column([], scroll=ft.ScrollMode.AUTO, expand=True)
+
+        def refresh_task_list():
+            indices = sorted_task_indices()
+            if not indices:
+                task_list_col.controls = [ft.Container(
+                    content=ft.Text("No tasks yet — add one below.", size=12, color=th["text3"]),
+                    padding=ft.Padding.symmetric(vertical=8))]
+            else:
+                task_list_col.controls = [task_row_widget(proj, i, render_detail_debounced) for i in indices]
+
+        def _on_task_sort(e):
+            key = e.control.data
+            task_sort_mode[0] = key
+            task_sort_lbl.value = TASK_SORT_OPTIONS[key]
+            refresh_task_list()
+            page.update()
+
+        task_sort_dd = ft.PopupMenuButton(
+            content=ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.SORT_ROUNDED, color=th["text3"], size=14),
+                    task_sort_lbl,
+                    ft.Icon(ft.Icons.ARROW_DROP_DOWN_ROUNDED, color=th["text3"], size=16),
+                ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                border=ft.Border.all(1, th["border2"]),
+                border_radius=8, bgcolor=th["input_bg"],
+                height=28, padding=ft.Padding.symmetric(horizontal=8),
+            ),
+            items=[
+                ft.PopupMenuItem(
+                    content=ft.Text(label, size=12, color=th["text"]),
+                    data=key, on_click=_on_task_sort,
+                )
+                for key, label in TASK_SORT_OPTIONS.items()
+            ],
+        )
+
+        refresh_task_list()
 
         def ask_delete_project(e):
             def do():
@@ -839,12 +935,12 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
                     *([ft.Text(f"Updated {proj['updated']}", size=10, color=th["text3"])] if proj.get("updated") else []),
                 ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Divider(height=1, color=th["divider"]),
-                ft.Column([
-                    *( [] if tasks else [ft.Container(
-                        content=ft.Text("No tasks yet — add one below.", size=12, color=th["text3"]),
-                        padding=ft.Padding.symmetric(vertical=8))]),
-                    *[task_row_widget(proj, i, render_detail_debounced) for i in range(len(tasks))],
-                ], scroll=ft.ScrollMode.AUTO, expand=True),
+                ft.Row([
+                    ft.Text("Tasks", size=12, color=th["text3"], weight=ft.FontWeight.W_600),
+                    ft.Container(expand=True),
+                    task_sort_dd,
+                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                task_list_col,
                 ft.Divider(height=1, color=th["divider"]),
                 ft.Text("Add task", size=12, color=th["text3"], weight=ft.FontWeight.W_600),
                 ft.Row([new_task_tf, pri_dd], spacing=8,
