@@ -13,7 +13,7 @@ def _greeting() -> tuple:
 
 def build_home_screen(go_to_projects, th: dict, username: str, page: ft.Page) -> ft.Container:
     greeting, emoji = _greeting()
-    active, done, pending = get_stats()
+    active, todo, in_progress, done = get_stats()
 
     def stat_card(icon, value, label, color, bg_l, bg_d):
         return ft.Container(
@@ -62,10 +62,15 @@ def build_home_screen(go_to_projects, th: dict, username: str, page: ft.Page) ->
             ], spacing=4),
             ft.Divider(height=1, color=th["divider"]),
             ft.Text("At a Glance", size=12, color=th["text3"], weight=ft.FontWeight.W_600),
-            ft.Row([
-                stat_card(ft.Icons.FOLDER_ROUNDED,       active,  "Projects", "#6366F1", "#EEF2FF", "#1E1B4B"),
-                stat_card(ft.Icons.CHECK_CIRCLE_ROUNDED, done,    "Done",     "#10B981", "#ECFDF5", "#064E3B"),
-                stat_card(ft.Icons.SCHEDULE_ROUNDED,     pending, "Pending",  "#F59E0B", "#FFFBEB", "#451A03"),
+            ft.Column([
+                ft.Row([
+                    stat_card(ft.Icons.FOLDER_ROUNDED,                active,      "Projects",    "#6366F1", "#EEF2FF", "#1E1B4B"),
+                    stat_card(ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED, todo,        "To Do",       th["text3"], "#F3F4F6", "#1F2937"),
+                ], spacing=12),
+                ft.Row([
+                    stat_card(ft.Icons.REMOVE_CIRCLE_ROUNDED,         in_progress, "In Progress", "#F59E0B", "#FFFBEB", "#451A03"),
+                    stat_card(ft.Icons.CHECK_CIRCLE_ROUNDED,           done,        "Done",        "#10B981", "#ECFDF5", "#064E3B"),
+                ], spacing=12),
             ], spacing=12),
             ft.Divider(height=1, color=th["divider"]),
             ft.Column([

@@ -51,7 +51,7 @@ def subtask_row_widget(task: dict, sub_idx: int, th: dict, page: ft.Page,
 
 # ── Task edit window ───────────────────────────────────────────────────────────
 def build_task_edit_window(proj: dict, task_idx: int, back_fn,
-                           th: dict, page: ft.Page, username: str) -> ft.Container:
+                           th: dict, page: ft.Page, username: str, session: dict = None) -> ft.Container:
     task = proj["tasks"][task_idx]
 
     # Ensure required fields exist
@@ -122,36 +122,52 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
     desc_tf = styled_field("Short Description", task.get("desc", ""),
                            hint="Brief summary shown in the task list…")
 
-    # ── Status toggle ─────────────────────────────────────────────────────────
-    done_state  = [task["done"]]
-    status_icon = ft.Icon(
-        ft.Icons.CHECK_CIRCLE_ROUNDED if task["done"] else ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED,
-        color=th["success"] if task["done"] else th["text3"], size=18,
-    )
-    status_lbl = ft.Text(
-        "Completed" if task["done"] else "Pending",
-        size=12, weight=ft.FontWeight.W_500,
-        color=th["success"] if task["done"] else th["text2"],
-    )
-    status_btn = ft.Container(
-        content=ft.Row([status_icon, status_lbl], spacing=8,
-                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        border=ft.Border.all(1, th["success"] if task["done"] else th["border2"]),
-        bgcolor=("#052e16" if th == DARK else "#ECFDF5") if task["done"] else "transparent",
-        border_radius=8, padding=ft.Padding.symmetric(vertical=9, horizontal=14),
-        animate=ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT),
-    )
-    def toggle_status(e):
-        done_state[0] = not done_state[0]
-        d = done_state[0]
-        status_icon.name   = ft.Icons.CHECK_CIRCLE_ROUNDED if d else ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED
-        status_icon.color  = th["success"] if d else th["text3"]
-        status_lbl.value   = "Completed" if d else "Pending"
-        status_lbl.color   = th["success"] if d else th["text2"]
-        status_btn.border  = ft.Border.all(1, th["success"] if d else th["border2"])
-        status_btn.bgcolor = ("#052e16" if th == DARK else "#ECFDF5") if d else "transparent"
-        status_btn.update()
-    status_btn.on_click = toggle_status
+    # ── Status selector (3 states) ────────────────────────────────────────────
+    # Migrate legacy done bool → status string
+    if "status" not in task:
+        task["status"] = "done" if task.get("done") else "todo"
+
+    STATUS_META = {
+        "todo":        {"label": "To Do",       "icon": ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED, "color": th["text3"],    "border": th["border2"],  "bg": "transparent",                              "line": False},
+        "in_progress": {"label": "In Progress",  "icon": ft.Icons.REMOVE_CIRCLE_ROUNDED,          "color": "#F59E0B",      "border": "#F59E0B",      "bg": "#451A03" if th == DARK else "#FFFBEB",     "line": False},
+        "done":        {"label": "Done",         "icon": ft.Icons.CHECK_CIRCLE_ROUNDED,           "color": th["success"],  "border": th["success"],  "bg": "#052e16" if th == DARK else "#ECFDF5",     "line": False},
+    }
+
+    status_state = [task["status"]]
+    status_btns  = {}
+
+    def make_status_btn(key):
+        meta   = STATUS_META[key]
+        active = status_state[0] == key
+        ic  = ft.Icon(meta["icon"], size=15, color=meta["color"] if active else th["text3"])
+        lbl = ft.Text(meta["label"], size=12, weight=ft.FontWeight.W_500,
+                      color=meta["color"] if active else th["text2"])
+        btn = ft.Container(
+            content=ft.Row([ic, lbl], spacing=6, alignment=ft.MainAxisAlignment.CENTER,
+                           vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            border_radius=8,
+            border=ft.Border.all(1.5 if active else 1, meta["border"] if active else th["border2"]),
+            bgcolor=meta["bg"] if active else "transparent",
+            padding=ft.Padding.symmetric(vertical=9, horizontal=14),
+            animate=ft.Animation(150, ft.AnimationCurve.EASE_IN_OUT),
+            expand=True,
+        )
+        def on_click(e, k=key):
+            status_state[0] = k
+            for kk, bb in status_btns.items():
+                m   = STATUS_META[kk]
+                sel = kk == k
+                bb["ic"].color  = m["color"] if sel else th["text3"]
+                bb["lbl"].color = m["color"] if sel else th["text2"]
+                bb["lbl"].style = None
+                bb["btn"].border  = ft.Border.all(1.5 if sel else 1, m["border"] if sel else th["border2"])
+                bb["btn"].bgcolor = m["bg"] if sel else "transparent"
+                bb["btn"].update()
+        btn.on_click = on_click
+        status_btns[key] = {"btn": btn, "ic": ic, "lbl": lbl}
+        return btn
+
+    status_row = ft.Row([make_status_btn(k) for k in STATUS_META], spacing=8)
 
     # ── Subtasks section ───────────────────────────────────────────────────────
     subtasks_col = ft.Column([], spacing=4)
@@ -327,12 +343,22 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
         txt = name_tf.value.strip()
         if not txt:
             show_toast(page, th, "Task title is required.", success=False); return
-        task.update({
+        s = status_state[0]
+        update = {
             "text": txt, "desc": desc_tf.value.strip(),
-            "priority": current_pri[0], "done": done_state[0],
+            "priority": current_pri[0],
+            "status": s,
+            "done": s == "done",
             "updated": now_str(), "created": task.get("created") or now_str(),
             "created_by": task.get("created_by") or username,
-        })
+        }
+        if s == "in_progress":
+            update["in_progress_by"]    = username
+            update["in_progress_photo"] = (session or {}).get("photo_url", "")
+        elif s != "in_progress":
+            update["in_progress_by"]    = task.get("in_progress_by", "")
+            update["in_progress_photo"] = task.get("in_progress_photo", "")
+        task.update(update)
         write_project(proj)
         show_toast(page, th, "Task saved")
         back_fn()
@@ -400,24 +426,22 @@ def build_task_edit_window(proj: dict, task_idx: int, back_fn,
                 bgcolor=th["card"], border=ft.Border.all(1, th["border"]),
                 border_radius=12, padding=18,
             ),
-            ft.Row([
-                ft.Container(
-                    content=ft.Column([
-                        section_label("Priority", ft.Icons.FLAG_OUTLINED, th),
-                        ft.Container(height=2), pri_row,
-                    ], spacing=8),
-                    bgcolor=th["card"], border=ft.Border.all(1, th["border"]),
-                    border_radius=12, padding=18, expand=2,
-                ),
-                ft.Container(
-                    content=ft.Column([
-                        section_label("Status", ft.Icons.TRACK_CHANGES_ROUNDED, th),
-                        ft.Container(height=2), status_btn,
-                    ], spacing=8),
-                    bgcolor=th["card"], border=ft.Border.all(1, th["border"]),
-                    border_radius=12, padding=18, expand=1,
-                ),
-            ], spacing=12),
+            ft.Container(
+                content=ft.Column([
+                    section_label("Priority", ft.Icons.FLAG_OUTLINED, th),
+                    ft.Container(height=2), pri_row,
+                ], spacing=8),
+                bgcolor=th["card"], border=ft.Border.all(1, th["border"]),
+                border_radius=12, padding=18,
+            ),
+            ft.Container(
+                content=ft.Column([
+                    section_label("Status", ft.Icons.TRACK_CHANGES_ROUNDED, th),
+                    ft.Container(height=2), status_row,
+                ], spacing=8),
+                bgcolor=th["card"], border=ft.Border.all(1, th["border"]),
+                border_radius=12, padding=18,
+            ),
             subtasks_section,
             ft.Container(
                 content=ft.Column([
@@ -508,22 +532,51 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
         if not isinstance(task.get("subtasks"), list):
             task["subtasks"] = []
 
+        # Migrate legacy done bool → status string
+        if "status" not in task:
+            task["status"] = "done" if task.get("done") else "todo"
+
         sub_total = len(task["subtasks"])
         sub_done  = sum(1 for s in task["subtasks"] if s["done"])
 
-        # Keep refs to mutable text nodes so toggle_done can update them in-place
+        STATUS_COLOR = {"todo": th["text3"], "in_progress": "#F59E0B", "done": th["success"]}
+        STATUS_ICON  = {
+            "todo":        ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED,
+            "in_progress": ft.Icons.REMOVE_CIRCLE_ROUNDED,
+            "done":        ft.Icons.CHECK_CIRCLE_ROUNDED,
+        }
+
+        status_ic = ft.Icon(
+            STATUS_ICON[task["status"]],
+            size=20,
+            color=STATUS_COLOR[task["status"]],
+        )
+
         title_text = ft.Text(
             task["text"], size=13, weight=ft.FontWeight.W_500,
             color=th["task_done_text"] if task["done"] else th["text"],
         )
 
-        def toggle_done(e):
-            task["done"] = e.control.value
-            # Update just the text color — no full rebuild, no hang
+        def cycle_status(e):
+            order = ["todo", "in_progress", "done"]
+            cur = task.get("status", "todo")
+            nxt = order[(order.index(cur) + 1) % len(order)]
+            task["status"] = nxt
+            task["done"]   = nxt == "done"
+            if nxt == "in_progress":
+                task["in_progress_by"]    = username
+                task["in_progress_photo"] = (session or {}).get("photo_url", "")
+            status_ic.name  = STATUS_ICON[nxt]
+            status_ic.color = STATUS_COLOR[nxt]
             title_text.color = th["task_done_text"] if task["done"] else th["text"]
+            title_text.style = None
+            status_ic.update()
             title_text.update()
+            # Rebuild row so avatar appears/disappears without full list refresh
+            render_detail()
             write_project(proj)
             _do_refresh_home()
+            page.update()
 
         def ask_del(e):
             def do():
@@ -541,6 +594,28 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             ], spacing=3, vertical_alignment=ft.CrossAxisAlignment.CENTER),
         )
 
+        # Avatar shown only when status is in_progress
+        ip_photo = task.get("in_progress_photo", "")
+        ip_name  = task.get("in_progress_by", "")
+        if ip_photo:
+            avatar_content = ft.Image(src=ip_photo, width=16, height=16, fit="cover")
+        else:
+            initial = (ip_name[0].upper() if ip_name else "?")
+            avatar_content = ft.Text(initial, size=9, color="#FFFFFF", weight=ft.FontWeight.W_700)
+        pending_avatar = ft.Container(
+            content=ft.Row([
+                ft.Container(
+                    content=avatar_content,
+                    width=16, height=16, border_radius=8,
+                    bgcolor="#F59E0B",
+                    alignment=ft.Alignment.CENTER,
+                    clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                ),
+                ft.Text(ip_name or "?", size=10, color="#F59E0B"),
+            ], spacing=4, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            visible=task.get("status") == "in_progress" and bool(ip_name),
+        )
+
         sub_badge = ft.Container(
             content=ft.Row([
                 ft.Icon(ft.Icons.ACCOUNT_TREE_OUTLINED, size=10,
@@ -553,14 +628,18 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
 
         row = ft.Container(
             content=ft.Row([
-                ft.Checkbox(value=task["done"], active_color=th["success"],
-                            on_change=toggle_done),
+                ft.GestureDetector(
+                    content=status_ic,
+                    on_tap=cycle_status,
+                    mouse_cursor=ft.MouseCursor.CLICK,
+                ),
                 ft.Column([
                     title_text,
                     ft.Row([
                         *([ft.Text(task["desc"], size=11, color=th["text3"], max_lines=1)]
                           if task.get("desc") else []),
                         creator_badge,
+                        pending_avatar,
                         sub_badge,
                     ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ], spacing=2, expand=True),
@@ -616,7 +695,7 @@ def build_projects_screen(page: ft.Page, th: dict, refresh_home, username: str =
             def back():
                 del proj["_active_task_idx"]; render_detail()
             detail_col.controls = [
-                build_task_edit_window(proj, ti, back, th, page, username)
+                build_task_edit_window(proj, ti, back, th, page, username, session)
             ]
             _hide_spinner()
             page.update(); return

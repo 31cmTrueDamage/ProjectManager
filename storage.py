@@ -229,11 +229,14 @@ def delete_project_file(proj: dict) -> None:
 
 def get_stats() -> tuple:
     projects = read_projects()
-    return (
-        len(projects),
-        sum(t["done"] for p in projects for t in p["tasks"]),
-        sum(not t["done"] for p in projects for t in p["tasks"]),
-    )
+    tasks = [t for p in projects for t in p["tasks"]]
+    def _status(t):
+        if "status" in t: return t["status"]
+        return "done" if t.get("done") else "todo"
+    todo        = sum(1 for t in tasks if _status(t) == "todo")
+    in_progress = sum(1 for t in tasks if _status(t) == "in_progress")
+    done        = sum(1 for t in tasks if _status(t) == "done")
+    return (len(projects), todo, in_progress, done)
 
 
 # ── Members ───────────────────────────────────────────────────────────────────
